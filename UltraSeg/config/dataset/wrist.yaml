@@ -1,0 +1,43 @@
+data_root: /home/wanghan/work/dataset/wrist
+img_dir: JPEGImages
+mask_dir: Masks
+class_rgb_dir: SegmentationClass
+object_dir: SegmentationObject
+num_classes: 10
+
+classes: [
+  background,
+  Flexor-Pollicis-Longus,
+  Flexor-Digitorum-Superficialis,
+  Flexor-Digitorum-Profundus,
+  Palmaris-Longus-Tendon,
+  Pronator-Quadratus,
+  Flexor-Carpi-Radialis,
+  Radial-Artery,
+  Median-Nerve,
+  Brachioradialis
+]
+
+color_map: [
+  (0,0, 0),
+  (32, 32, 185),
+  (102, 245, 102),
+  (214, 41, 69),
+  (218, 70, 218),
+  (177, 70, 92),
+  (156, 63, 156),
+  (165, 32, 59),
+  (204, 204, 59),
+  (194, 87, 140)
+]
+
+# background 0 0 0
+# Flexor-Pollicis-Longus 32 32 185  #拇长屈肌
+# Flexor-Digitorum-Superficialis 102 245 102 # 指浅屈肌
+# Flexor-Digitorum-Profundus 214 41 69 # 指深屈肌
+# Palmaris-Longus-Tendon 218 70 218 # 掌长肌腱
+# Pronator-Quadratus 177 70 92 # 旋前方肌
+# Flexor-Carpi-Radialis 156 63 156 # 桡侧腕屈肌
+# Radial-Artery 165 32 59 # 桡动脉  
+# Median-Nerve 204 204 59  # 正中神经
+# Brachioradialis 194 87 140 # 肱桡肌
