@@ -16,13 +16,13 @@ def get_norm_layer(
 
     # Step 1. Convert tot dict representation
 
-    ## Check boolean
+    # Check boolean
     if use_norm is True:
         norm_params = {"type": "batchnorm"}
     elif use_norm is False:
         norm_params = {"type": "identity"}
 
-    ## Check string
+    # Check string
     elif isinstance(use_norm, str):
         norm_str = use_norm.lower()
         if norm_str == "inplace":
@@ -39,7 +39,7 @@ def get_norm_layer(
                 f"{supported_norms}"
             )
 
-    ## Check dict
+    # Check dict
     elif isinstance(use_norm, dict):
         norm_params = use_norm
 

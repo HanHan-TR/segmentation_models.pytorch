@@ -95,6 +95,11 @@ def get_stats(
                 shape (N, ...)
 
         mode (str): One of ``'binary'`` | ``'multilabel'`` | ``'multiclass'``
+            - ``'binary'``: 用于二分类任务，每个像素只能属于0或1
+            - ``'multilabel'``: 用于互斥的多类别分割任务，每个像素只能且必须属于一个类别 (C个类别之一)
+            - ``'multiclass'``: 用于非互斥的多类别分割任务，每个像素可以属于多个类别
+                每个类别都有独立的通道，通道内属于该类的像素标记为1，其余为0
+
         ignore_index (Optional[int]): Label to ignore on for metric computation.
             **Not** supported for ``'binary'`` and ``'multilabel'`` modes.  Defaults to None.
         threshold (Optional[float, List[float]]): Binarization threshold for
@@ -163,9 +168,7 @@ def get_stats(
         )
 
     if mode == "multiclass":
-        tp, fp, fn, tn = _get_stats_multiclass(
-            output, target, num_classes, ignore_index
-        )
+        tp, fp, fn, tn = _get_stats_multiclass(output, target, num_classes, ignore_index)
     else:
         if threshold is not None:
             output = torch.where(output >= threshold, 1, 0)
@@ -187,9 +190,10 @@ def _get_stats_multiclass(
 
     if ignore_index is not None:
         ignore = target == ignore_index
+        # 将 output 和 target 中需要忽略的位置设置为 -1，这样它们就不会被计入后续的统计中
         output = torch.where(ignore, -1, output)
         target = torch.where(ignore, -1, target)
-        ignore_per_sample = ignore.view(batch_size, -1).sum(1)
+        ignore_per_sample = ignore.view(batch_size, -1).sum(1)  # 计算每个样本中需要忽略的像素数
 
     tp_count = torch.zeros(batch_size, num_classes, dtype=torch.long)
     fp_count = torch.zeros(batch_size, num_classes, dtype=torch.long)
@@ -201,15 +205,22 @@ def _get_stats_multiclass(
         output_i = output[i]
         mask = output_i == target_i
         matched = torch.where(mask, target_i, -1)
+
+        # 由于被忽略的类别表示为-1，而以下直方图统计的min=0，因此实现了对被忽略的像素的统计排除
+
+        # 预测类别与实际类别相同的像素数量
         tp = torch.histc(matched.float(), bins=num_classes, min=0, max=num_classes - 1)
+        # 预测为某类但实际不是该类的像素数量
         fp = (
             torch.histc(output_i.float(), bins=num_classes, min=0, max=num_classes - 1)
             - tp
         )
+        # 实际为某类但预测不是该类的像素数量
         fn = (
             torch.histc(target_i.float(), bins=num_classes, min=0, max=num_classes - 1)
             - tp
         )
+        # 总像素数减去 tp、fp、fn 即为 tn
         tn = num_elements - tp - fp - fn
         if ignore_index is not None:
             tn = tn - ignore_per_sample[i]
@@ -218,7 +229,7 @@ def _get_stats_multiclass(
         fn_count[i] = fn.long()
         tn_count[i] = tn.long()
 
-    return tp_count, fp_count, fn_count, tn_count
+    return tp_count, fp_count, fn_count, tn_count  # 参数的size均为(batch_size, num_classes)
 
 
 @torch.inference_mode()
@@ -273,14 +284,14 @@ def _compute_metric(
     class_weights = class_weights / class_weights.sum()
 
     if reduction == "micro":
-        tp = tp.sum()
+        tp = tp.sum()  # 对所有维度求和，计算全局统计，返回一个标量
         fp = fp.sum()
         fn = fn.sum()
         tn = tn.sum()
         score = metric_fn(tp, fp, fn, tn, **metric_kwargs)
 
     elif reduction == "macro":
-        tp = tp.sum(0)
+        tp = tp.sum(0)  # 沿维度0求和，计算每个类别的统计， 返回一个长度为num_classes的向量
         fp = fp.sum(0)
         fn = fn.sum(0)
         tn = tn.sum(0)
@@ -443,16 +454,15 @@ def iou_score(
     zero_division: Union[str, float] = 1.0,
 ) -> torch.Tensor:
     """IoU score or Jaccard index"""  # noqa
-    return _compute_metric(
-        _iou_score,
-        tp,
-        fp,
-        fn,
-        tn,
-        reduction=reduction,
-        class_weights=class_weights,
-        zero_division=zero_division,
-    )
+    return _compute_metric(_iou_score,
+                           tp,
+                           fp,
+                           fn,
+                           tn,
+                           reduction=reduction,
+                           class_weights=class_weights,
+                           zero_division=zero_division,
+                           )
 
 
 def accuracy(

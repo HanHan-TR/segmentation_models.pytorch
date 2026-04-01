@@ -46,14 +46,13 @@ class FocalLoss(_Loss):
         self.mode = mode
         self.ignore_index = ignore_index
         self.reduction = reduction
-        self.focal_loss_fn = partial(
-            focal_loss_with_logits,
-            alpha=alpha,
-            gamma=gamma,
-            reduced_threshold=reduced_threshold,
-            reduction=reduction,
-            normalized=normalized,
-        )
+        self.focal_loss_fn = partial(focal_loss_with_logits,
+                                     alpha=alpha,
+                                     gamma=gamma,
+                                     reduced_threshold=reduced_threshold,
+                                     reduction=reduction,
+                                     normalized=normalized,
+                                     )
 
     def forward(self, y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
         if self.mode in {BINARY_MODE, MULTILABEL_MODE}:
@@ -74,11 +73,11 @@ class FocalLoss(_Loss):
 
             # Filter anchors with -1 label from loss computation
             if self.ignore_index is not None:
-                not_ignored = y_true != self.ignore_index
+                not_ignored = y_true != self.ignore_index  # shape (N, H, W)
 
             for cls in range(num_classes):
-                cls_y_true = (y_true == cls).long()
-                cls_y_pred = y_pred[:, cls, ...]
+                cls_y_true = (y_true == cls).long()  # shape (N, H, W)
+                cls_y_pred = y_pred[:, cls, ...]  # shape (N, H, W)
 
                 if self.ignore_index is not None:
                     cls_y_true = cls_y_true[not_ignored]

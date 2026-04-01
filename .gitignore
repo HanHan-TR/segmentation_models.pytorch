@@ -110,3 +110,8 @@ venv.bak/
 
 # ruff
 .ruff_cache/
+
+# 实验结果
+
+res/
+wandb/

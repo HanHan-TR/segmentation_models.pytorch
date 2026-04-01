@@ -35,7 +35,8 @@ class Wrist_Ultrasound_Dataset(Dataset):
         self.mode = mode
         self.img_paths = sorted((Path(data_root) / img_dir / mode).glob(f'*{img_suffix}'))
         self.mask_paths = sorted((Path(data_root) / mask_dir / mode).glob(f'*{mask_suffix}'))
-
+        self.mean = tuple(mean)
+        self.std = tuple(std)
         assert len(self.img_paths) == len(self.mask_paths), "Number of images and masks should be the same !"
 
         train_pipeline, val_pipeline = data_augment_pipeline(input_size=input_size,
@@ -63,8 +64,15 @@ class Wrist_Ultrasound_Dataset(Dataset):
         augmented = self.augment_pipeline(image=img, mask=mask)
         image = augmented['image']
         mask = augmented['mask']
+        # mask = mask.unsqueeze(0)
 
         return (image, mask)
+
+    def get_mean(self):
+        return self.mean
+
+    def get_std(self):
+        return self.std
 
 
 def create_dataset(dataset_cfg,

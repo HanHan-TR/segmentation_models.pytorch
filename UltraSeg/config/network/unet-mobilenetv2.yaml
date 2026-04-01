@@ -1,0 +1,3 @@
+arch: unet
+encoder_name: mobilenet_v2
+encoder_weights: imagenet

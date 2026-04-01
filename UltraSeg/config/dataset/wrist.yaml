@@ -7,6 +7,8 @@ object_dir: SegmentationObject
 
 num_classes: 10
 
+input_size: [512, 512]
+
 mean:
   wrist: [0.118, 0.126, 0.133]
   imagenet: [0.485, 0.456, 0.406]
@@ -41,16 +43,16 @@ color_map: [
   [194, 87, 140]
 ]
 
-# background 0 0 0
-# Flexor-Pollicis-Longus 32 32 185  #拇长屈肌
-# Flexor-Digitorum-Superficialis 102 245 102 # 指浅屈肌
-# Flexor-Digitorum-Profundus 214 41 69 # 指深屈肌
-# Palmaris-Longus-Tendon 218 70 218 # 掌长肌腱
-# Pronator-Quadratus 177 70 92 # 旋前方肌
-# Flexor-Carpi-Radialis 156 63 156 # 桡侧腕屈肌
-# Radial-Artery 165 32 59 # 桡动脉  
-# Median-Nerve 204 204 59  # 正中神经
-# Brachioradialis 194 87 140 # 肱桡肌
+# background 0 0 0  class 0
+# Flexor-Pollicis-Longus 32 32 185  class 1  #拇长屈肌
+# Flexor-Digitorum-Superficialis 102 245 102  class 2 # 指浅屈肌
+# Flexor-Digitorum-Profundus 214 41 69  class 3 # 指深屈肌
+# Palmaris-Longus-Tendon 218 70 218  class 4 # 掌长肌腱
+# Pronator-Quadratus 177 70 92  class 5 # 旋前方肌
+# Flexor-Carpi-Radialis 156 63 156  class 6 # 桡侧腕屈肌
+# Radial-Artery 165 32 59  class 7 # 桡动脉  
+# Median-Nerve 204 204 59  class 8 # 正中神经
+# Brachioradialis 194 87 140  class 9 # 肱桡肌
 
 # 像素均值与标准差统计结果（基于/home/wanghan/work/dataset/wrist/JPEGImages/train文件夹）
 # python UltraSeg/tools/calculate_dataset_mean_std.py --image-root-folder /home/wanghan/work/dataset/wrist/JPEGImages/train

@@ -243,7 +243,7 @@ def wing_loss(
 def label_smoothed_nll_loss(
     lprobs: torch.Tensor,
     target: torch.Tensor,
-    epsilon: float,
+    epsilon: Optional[float] = None,
     ignore_index=None,
     reduction="mean",
     dim=-1,
@@ -263,6 +263,8 @@ def label_smoothed_nll_loss(
     if ignore_index is not None:
         pad_mask = target.eq(ignore_index)
         target = target.masked_fill(pad_mask, 0)
+        # 确保target是整数类型，用于gather操作
+        target = target.long()
         nll_loss = -lprobs.gather(dim=dim, index=target)
         smooth_loss = -lprobs.sum(dim=dim, keepdim=True)
 
@@ -271,6 +273,8 @@ def label_smoothed_nll_loss(
         nll_loss = nll_loss.masked_fill(pad_mask, 0.0)
         smooth_loss = smooth_loss.masked_fill(pad_mask, 0.0)
     else:
+        # 确保target是整数类型，用于gather操作
+        target = target.long()
         nll_loss = -lprobs.gather(dim=dim, index=target)
         smooth_loss = -lprobs.sum(dim=dim, keepdim=True)
 
@@ -283,6 +287,9 @@ def label_smoothed_nll_loss(
     if reduction == "mean":
         nll_loss = nll_loss.mean()
         smooth_loss = smooth_loss.mean()
+
+    if epsilon is None:
+        return nll_loss
 
     eps_i = epsilon / lprobs.size(dim)
     loss = (1.0 - epsilon) * nll_loss + eps_i * smooth_loss

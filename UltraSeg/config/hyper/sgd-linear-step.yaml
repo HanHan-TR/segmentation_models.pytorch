@@ -1,0 +1,52 @@
+seed: 42
+deterministic: True
+
+epochs: 
+  default: 120
+  min-max: [50, 300]
+batch_size: 
+  default: 16
+  min-max: [8, 32]
+
+
+num_workers: 4
+
+# steps_per_epoch = len(train_loader)
+# total steps = epochs * steps_per_epoch
+warmup_steps_ratio: 
+  default: 0.1  # 0.01 ~ 0.1
+  min-max: [0.01, 0.1]
+# warmup_steps: 0.1 * total_steps
+warmup_start_factor: 
+  default: 0.01  # 0.01 ~ 0.2
+  min-max: [0.01, 0.2]
+warmup_type: linear  # linear | cosine | exponential, exp_k: 2~8
+warmup_enabled: True
+
+main_lr_type: step  # cosine | step | poly | one_cycle | reduce_on_plateau
+gamma: 
+  default: 0.5  # 0.1 ~ 0.5
+  min-max: [0.1, 0.5]
+drop_steps: 
+  default: 5  # 5 ~ 10
+  min-max: [5, 10]
+
+# step_size =epochs // drop_steps
+
+optimizer: sgd  # sgd | adamw
+weight_decay: 
+  default: 1e-4
+  min-max: [1e-5, 5e-4]
+momentum: 
+  default: 0.95
+  min-max: [0.9, 0.99]
+
+lr_decoder: 
+  default: 0.02
+  min-max: [0.01, 0.05]
+lr_encoder_factor: 
+  default: 0.3
+  min-max: [0.05, 0.5]
+
+# lr_encoder = lr_decoder * lr_encoder_factor
+no_decay_bias_norm: True

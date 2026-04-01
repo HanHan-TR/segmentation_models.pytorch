@@ -44,6 +44,7 @@ def yaml_load(file='data.yaml'):
 
 
 def yaml_save(file='data.yaml', data={}):
+    file = str(file)  # convert to str()
     # Single-line safe yaml saving
     with open(file, 'w') as f:
         yaml.safe_dump({k: str(v) if isinstance(v, Path) else v for k, v in data.items()}, f, sort_keys=False)

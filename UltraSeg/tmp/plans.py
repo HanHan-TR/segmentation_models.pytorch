@@ -110,12 +110,10 @@ class WarmupThen:
                 - 预热调度器状态
                 - 主调度器状态（如果有 state_dict 方法）
         """
-        return {
-            "global_step": self.global_step,
-            "warmup_steps": self.warmup_steps,
-            "warmup_scheduler": self.warmup_scheduler.state_dict(),
-            "main_scheduler": self.main_scheduler.state_dict() if hasattr(self.main_scheduler, "state_dict") else None,
-        }
+        return {"global_step": self.global_step,
+                "warmup_steps": self.warmup_steps,
+                "warmup_scheduler": self.warmup_scheduler.state_dict(),
+                "main_scheduler": self.main_scheduler.state_dict() if hasattr(self.main_scheduler, "state_dict") else None}
 
     def load_state_dict(self, state: Dict[str, Any]) -> None:
         self.global_step = int(state["global_step"])
@@ -126,9 +124,17 @@ class WarmupThen:
 
 
 def split_encoder_decoder_params(model: nn.Module) -> Tuple[List[nn.Parameter], List[nn.Parameter]]:
-    """
-    Heuristic split: parameters under 'encoder.' go to encoder group, others to decoder/head group.
-    Adapt this to your own model implementation (smp, monai, custom unet, nnunet, etc.).
+    """将模型参数分为编码器参数组和解码器/头部参数组, 该函数采用启发式方法，根据参数名称前缀将参数分组：
+    - 名称以 'encoder.' 开头的参数被分配到编码器组
+    - 其他参数被分配到解码器/头部组.
+
+    Args:
+        model (nn.Module): PyTorch 模型实例
+
+    Returns:
+        enc (List[nn.Parameter]): 编码器参数列表.
+
+        dec (List[nn.Parameter]): 解码器/头部参数列表.
     """
     enc, dec = [], []
     for name, p in model.named_parameters():
@@ -141,21 +147,50 @@ def split_encoder_decoder_params(model: nn.Module) -> Tuple[List[nn.Parameter], 
     return enc, dec
 
 
-def make_optimizer_param_groups(model: nn.Module, lr_encoder: float, lr_decoder: float, weight_decay: float,
-                                no_decay_bias_norm: bool = True) -> List[Dict[str, Any]]:
-    """
-    Optional: exclude bias / norm params from weight_decay (common heuristic). Keep if you want.
+def make_optimizer_param_groups(model: nn.Module,
+                                lr_encoder: float,
+                                lr_decoder: float,
+                                weight_decay: float,
+                                no_decay_bias_norm: bool = True,
+                                ) -> List[Dict[str, Any]]:
+    """为模型创建优化器参数组，支持为编码器和解码器设置不同的学习率和权重衰减策略。
+
+    Args:
+        model (nn.Module): 待优化的神经网络模型
+        lr_encoder (float): 编码器部分的学习率
+        lr_decoder (float): 解码器部分的学习率
+        weight_decay (float): 权重衰减系数
+        no_decay_bias_norm (bool, optional): 是否不对偏置和归一化参数应用权重衰减。
+            默认为 True，这是一种常见的优化策略。
+
+    Returns:
+        List[Dict[str, Any]]: 优化器参数组列表，每个字典包含参数及其对应的学习率和权重衰减设置
+
+    Example:
+        >>> param_groups = make_optimizer_param_groups(
+        ...     model=model,
+        ...     lr_encoder=1e-4,
+        ...     lr_decoder=1e-3,
+        ...     weight_decay=1e-4,
+        ...     no_decay_bias_norm=True
+        ... )
+        >>> optimizer = torch.optim.AdamW(param_groups)
     """
     enc_params, dec_params = split_encoder_decoder_params(model)
 
     def group_params(params: List[nn.Parameter], lr: float):
         if not no_decay_bias_norm:
+            # 当 no_decay_bias_norm 为 False 时，即不对偏置项与归一化参数应用权重衰减，
+            # 所有参数作为一组，应用相同的学习率和权重衰减
             return [{"params": params, "lr": lr, "weight_decay": weight_decay}]
 
+        # 当 no_decay_bias_norm 为 True 时，将参数分为两组：
+        # - decay: 包含维度大于1的参数，通常是卷积核、全连接层的权重等
+        # - no_decay: 包含维度等于1的参数，通常是偏置项、归一化参数等
         decay, no_decay = [], []
         for p in params:
             # We cannot reliably check "is norm" without names; this is minimal.
-            if p.ndim == 1:  # often bias or norm scale
+            if p.ndim == 1 or "norm" in p.name or "bias" in p.name:  # often bias or norm scale
                 no_decay.append(p)
             else:
                 decay.append(p)
@@ -178,8 +213,12 @@ def validate(model: nn.Module, val_loader, device: torch.device) -> Dict[str, fl
     return {"val_loss": 0.0, "val_dice": 0.0}
 
 
-def train_one_epoch(model: nn.Module, train_loader, optimizer: Optimizer, lr_ctl,
-                    device: torch.device, scaler: torch.amp.GradScaler,
+def train_one_epoch(model: nn.Module,
+                    train_loader,
+                    optimizer: Optimizer,
+                    lr_ctl,
+                    device: torch.device,
+                    scaler: torch.amp.GradScaler,
                     criterion: nn.Module,
                     max_grad_norm: Optional[float] = 1.0) -> int:
     model.train()
@@ -192,13 +231,15 @@ def train_one_epoch(model: nn.Module, train_loader, optimizer: Optimizer, lr_ctl
         images = images.to(device, non_blocking=True)
         masks = masks.to(device, non_blocking=True)
 
-        optimizer.zero_grad(set_to_none=True)
+        optimizer.zero_grad()  # 清除优化器中的梯度，避免梯度累积
 
-        with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=(device.type == "cuda")):
+        with torch.autocast(device_type=device.type,
+                            dtype=torch.float16,
+                            enabled=(device.type == "cuda")):  # 仅在 CUDA 设备上启用自动混合精度
             logits = model(images)
             loss = criterion(logits, masks)
 
-        scaler.scale(loss).backward()
+        scaler.scale(loss).backward()  # 使用梯度缩放器对损失进行缩放后执行反向传播，防止梯度下溢
 
         # Gradient clipping (optional but often stabilizes segmentation training)
         if max_grad_norm is not None:
@@ -258,11 +299,9 @@ def build_scheme_A(model, train_loader_len: int):
 
     param_groups = make_optimizer_param_groups(model, lr_encoder, lr_decoder, weight_decay, no_decay_bias_norm=True)
 
-    optimizer = torch.optim.SGD(
-        param_groups,
-        momentum=0.9,
-        nesterov=True,
-    )
+    optimizer = torch.optim.SGD(param_groups,
+                                momentum=0.9,
+                                nesterov=True)
 
     # Main scheduler should be created BEFORE warmup so it captures base_lrs correctly.
     drop_every_epochs = 50

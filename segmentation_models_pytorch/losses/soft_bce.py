@@ -62,13 +62,11 @@ class SoftBCEWithLogitsLoss(nn.Module):
         else:
             soft_targets = y_true
 
-        loss = F.binary_cross_entropy_with_logits(
-            y_pred,
-            soft_targets,
-            self.weight,
-            pos_weight=self.pos_weight,
-            reduction="none",
-        )
+        loss = F.binary_cross_entropy_with_logits(y_pred,
+                                                  soft_targets,
+                                                  self.weight,
+                                                  pos_weight=self.pos_weight,
+                                                  reduction="none")
 
         if self.ignore_index is not None:
             not_ignored_mask = y_true != self.ignore_index
