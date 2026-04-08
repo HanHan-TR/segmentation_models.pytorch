@@ -1,4 +1,5 @@
 import math
+from os import path
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -138,6 +139,8 @@ class ModelSaver:
     def __init__(self,
                  best_model_pth: PosixPath,
                  last_model_pth: PosixPath,
+                 ema_best_model_pth: PosixPath = None,
+                 ema_last_model_pth: PosixPath = None,
                  metric_weights: Optional[List[float]] = None,
                  higher_is_better: bool = True,
                  min_delta: float = 1e-6,
@@ -145,19 +148,17 @@ class ModelSaver:
                  loss_alpha: float = 1.0,
                  metric_reduction: str = "weighted",
                  class_names: List[str] = None):
-        self.best_pth = str(best_model_pth)
-        self.last_pth = str(last_model_pth)
-        self.best_score = -float("inf") if higher_is_better else float("inf")  # 初始分数, 当 higher_is_better 为 True 时, 初始分数为负无穷, 否则为正无穷
-        self.best_loss = float("inf")  # 初始损失为正无穷
-        self.best_epoch = -1
+
         self.min_delta = min_delta
         self.higher_is_better = higher_is_better
         self.loss_transform = loss_transform
         self.loss_alpha = loss_alpha
         self.class_names = class_names if class_names is not None else None
+
         assert metric_reduction in ['micro', 'macro', 'weighted', 'macro-imagewise', 'weighted-imagewise'], \
             f"Unsupported metric_reduction: {metric_reduction}"
         self.metric_reduction = metric_reduction
+
         self.class_weights = None  # 需要在训练过程中计算得到，并传入 save() 函数
         # 默认权重
         self.metric_weights = metric_weights or {"loss": 0.10,
@@ -174,6 +175,28 @@ class ModelSaver:
         if abs(s - 1.0) > 1e-6:
             self.metric_weights = {k: v / s for k, v in self.metric_weights.items()}
 
+        # 模型信息记录
+        self.best_pth = {'ori': str(best_model_pth),
+                         'ema': str(ema_best_model_pth) if ema_best_model_pth is not None else None}
+        self.last_pth = {'ori': str(last_model_pth),
+                         'ema': str(ema_last_model_pth) if ema_last_model_pth is not None else None}
+
+        init_score = -float("inf") if higher_is_better else float("inf")
+        self.improved = {'ori': False,
+                         'ema': False}
+        self.best_score = {'ori': init_score,
+                           'ema': init_score
+                           }  # 同时跟踪原始模型和EMA模型的最佳分数
+        self.best_loss = {'ori': float("inf"),
+                          'ema': float("inf")}  # 同时跟踪原始模型和EMA
+        self.best_epoch = {'ori': -1,
+                           'ema': -1}  # 同时跟踪原始模型和EMA模型
+        self.best_metrics_all_classes = {'ori': {},
+                                         'ema': {}}  # 同时跟踪原始模型和EMA模型的所有指标
+        self.best_metrics_per_classes = {'ori': {},
+                                         'ema': {}}  # 同时跟踪原始模型和EMA模型的每类指标
+        self.saved_model_types = []
+
     def _loss_to_score(self, val_loss):
         """
         将 val_loss 映射为 [0,1] 左右的“越大越好”分数。
@@ -189,8 +212,11 @@ class ModelSaver:
             raise ValueError(f"Unsupported loss_transform: {self.loss_transform}")
 
     def compute_score(self,
-                      val_loss: float,
-                      metrics_all_classes: Optional[Dict]):
+                      val_loss: float = None,
+                      metrics_all_classes: Optional[Dict] = None):
+
+        if val_loss is None or metrics_all_classes is None:
+            return None
 
         accuracy = metrics_all_classes[self.metric_reduction].get("accuracy", 0.0)
         precision = metrics_all_classes[self.metric_reduction].get("precision", 0.0)
@@ -211,6 +237,25 @@ class ModelSaver:
 
         return score
 
+    def is_improved(self, composite_score, val_loss, model_type='ori'):
+        if composite_score is None or val_loss is None:
+            return False
+
+        if self.higher_is_better:
+            if composite_score > self.best_score[model_type] + self.min_delta:
+                return True
+            elif abs(composite_score - self.best_score[model_type]) <= self.min_delta and val_loss < self.best_loss[model_type]:
+                return True
+            else:
+                return False
+        else:
+            if composite_score < self.best_score[model_type] - self.min_delta:
+                return True
+            elif abs(composite_score - self.best_score[model_type]) <= self.min_delta and val_loss < self.best_loss[model_type]:
+                return True
+            else:
+                return False
+
     def save(self,
              epoch: int,
              model: nn.Module,
@@ -219,104 +264,126 @@ class ModelSaver:
              val_loss: float,
              metrics_per_classes: Optional[Dict] = None,
              metrics_all_classes: Optional[Dict] = None,
-             class_weights: Optional[List[float]] = None,
-             extra_state=None,
-             ):
-        composite_score = self.compute_score(val_loss=val_loss,
-                                             metrics_all_classes=metrics_all_classes)
+             # EMA 模型相关参数
+             ema_model: nn.Module = None,
+             ema_val_loss: Optional[float] = None,
+             ema_metrics_per_classes: Optional[Dict] = None,
+             ema_metrics_all_classes: Optional[Dict] = None,
+             class_weights: Optional[List[float]] = None):
+        metrics_per_classes = {'ori': metrics_per_classes if metrics_per_classes is not None else None,
+                               'ema': ema_metrics_per_classes if ema_metrics_per_classes is not None else None
+                               }
+        metrics_all_classes = {'ori': metrics_all_classes if metrics_all_classes is not None else None,
+                               'ema': ema_metrics_all_classes if ema_metrics_all_classes is not None else None
+                               }
+        val_loss = {'ori': val_loss,
+                    'ema': ema_val_loss if ema_val_loss is not None else None}
+
+        composite_score = {'ori': None, 'ema': None}
+        for model_type in ['ori', 'ema']:
+            composite_score[model_type] = self.compute_score(val_loss=val_loss[model_type],
+                                                             metrics_all_classes=metrics_all_classes[model_type])
 
         # ------------------------------ 保存最近一个epoch的模型 -------------------------------------------------
         last_state_dict = {"epoch": epoch,
                            "model_state_dict": deepcopy(model.state_dict()),
                            "optimizer_state_dict": deepcopy(optimizer.state_dict()) if optimizer is not None else None,
                            "lr_ctrl_state_dict": deepcopy(lr_ctrl.state_dict()) if lr_ctrl is not None else None,
-                           "composite_score": composite_score,
-                           "val_loss": float(val_loss),
+                           "composite_score": composite_score["ori"],
+                           "val_loss": float(val_loss["ori"]),
                            "class_names": self.class_names if self.class_names is not None else None,
-                           "metrics_per_classes": metrics_per_classes if metrics_per_classes is not None else None,
-                           "metrics_all_classes": metrics_all_classes if metrics_all_classes is not None else None,
+                           "metrics_per_classes": metrics_per_classes["ori"],
+                           "metrics_all_classes": metrics_all_classes["ori"],
                            "composite_weights": self.metric_weights,
                            "class_weights": class_weights if class_weights is not None else None,
                            "loss_transform": self.loss_transform,
                            }
-        if extra_state is not None:
-            last_state_dict["extra_state"] = extra_state
-
         # 保存最近一个epoch的模型
-        torch.save(last_state_dict, str(self.last_pth))
+        torch.save(last_state_dict, str(self.last_pth['ori']))
+
+        # 保存最近一个epoch的EMA模型
+        if ema_model is not None:
+            last_ema_state_dict = {"epoch": epoch,
+                                   "model_state_dict": deepcopy(ema_model.state_dict()) if ema_model is not None else None,
+                                   "composite_score": composite_score["ema"],
+                                   "val_loss": float(val_loss["ema"]),
+                                   "class_names": self.class_names if self.class_names is not None else None,
+                                   "metrics_per_classes": metrics_per_classes["ema"],
+                                   "metrics_all_classes": metrics_all_classes["ema"],
+                                   "composite_weights": self.metric_weights,
+                                   "class_weights": class_weights if class_weights is not None else None,
+                                   "loss_transform": self.loss_transform,
+                                   }
+            if self.last_pth['ema'] is not None:
+                torch.save(last_ema_state_dict, str(self.last_pth['ema']))
 
         # ------------------------------ 保存最优模型 -------------------------------------------------
-        improved = False
+        for model_type in ['ori', 'ema']:
+            self.improved[model_type] = self.is_improved(composite_score[model_type],
+                                                         val_loss[model_type],
+                                                         model_type=model_type)
+            if self.improved[model_type]:
+                self.best_score[model_type] = composite_score[model_type]
+                self.best_loss[model_type] = float(val_loss[model_type])
+                self.best_epoch[model_type] = epoch
+                self.best_metrics_all_classes[model_type] = metrics_all_classes[model_type]
+                self.best_metrics_per_classes[model_type] = metrics_per_classes[model_type]
 
-        # 主判据：综合分数更高
-        if composite_score > self.best_score + self.min_delta:
-            improved = True
+                save_dict = {"best_epoch": epoch,
+                             "model_state_dict": deepcopy(model.state_dict()) if model_type == 'ori' else deepcopy(ema_model.state_dict()),
+                             "composite_score": self.best_score[model_type],
+                             "val_loss": self.best_loss[model_type],
+                             "class_names": self.class_names if self.class_names is not None else None,
+                             "metrics_per_classes": self.best_metrics_per_classes[model_type],
+                             "metrics_all_classes": self.best_metrics_all_classes[model_type],
+                             "composite_weights": self.metric_weights,
+                             "class_weights": class_weights if class_weights is not None else None,
+                             "loss_transform": self.loss_transform,
+                             }
+                # 保存模型
+                torch.save(save_dict, str(self.best_pth[model_type]))
+                print(f"[BestModelSaver] Saved best {model_type} model to path {self.best_pth[model_type]}")
 
-        # 次判据：分数非常接近时，loss 更低优先
-        elif abs(composite_score - self.best_score) <= self.min_delta and val_loss < self.best_loss:
-            improved = True
+                if model_type not in self.saved_model_types:
+                    self.saved_model_types.append(model_type)
 
-        if improved:
-            self.best_score = composite_score
-            self.best_loss = float(val_loss)
-            self.best_epoch = epoch
-            self.best_metrics_all_classes = metrics_all_classes
-            self.best_metrics_per_classes = metrics_per_classes
-
-            save_dict = {"best_epoch": epoch,
-                         "model_state_dict": deepcopy(model.state_dict()),
-                         "composite_score": self.best_score,
-                         "val_loss": self.best_loss,
-                         "class_names": self.class_names if self.class_names is not None else None,
-                         "metrics_per_classes": self.best_metrics_per_classes if self.best_metrics_per_classes is not None else None,
-                         "metrics_all_classes": self.best_metrics_all_classes if self.best_metrics_all_classes is not None else None,
-                         "composite_weights": self.metric_weights,
-                         "class_weights": class_weights if class_weights is not None else None,
-                         "loss_transform": self.loss_transform,
-                         }
-
-            if extra_state is not None:
-                save_dict["extra_state"] = extra_state
-
-            # 保存模型
-            torch.save(save_dict, str(self.best_pth))
-
-            # 打印输出信息
-            print(
-                f"[BestModelSaver] Saved new best model at epoch {epoch} | "
-                f"composite_score={composite_score:.6f}, val_loss={val_loss:.6f}"
-            )
+                self.improved[model_type] = False  # 重置 improved 标志，等待下一个 epoch 的评估
 
         return composite_score
 
-    def load_best_ckpt(self, model: nn.Module, ckpt_path: Optional[Union[str, PosixPath]] = None):
+    def load_best_ckpt(self, model: nn.Module,
+                       model_type='ori',
+                       ckpt_path: Optional[Union[str, PosixPath]] = None):
         if ckpt_path is not None:
             ckpt_path = Path(ckpt_path)
         else:
-            ckpt_path = Path(self.best_pth)
+            ckpt_path = Path(self.best_pth[model_type])
 
         if ckpt_path.exists():
             ckpt = torch.load(str(ckpt_path))
+            self.best_score = ckpt.get("composite_score", self.best_score)
+            self.best_metrics_all_classes = ckpt.get("metrics_all_classes", None)
+            self.best_metrics_per_classes = ckpt.get("metrics_per_classes", None)
+            self.class_weights = ckpt.get("class_weights", None)
+
             if "model_state_dict" in ckpt:
                 model.load_state_dict(ckpt["model_state_dict"])
-                print(f"[BestModelSaver] Loaded model from {ckpt_path}")
+                print(f"[BestModelSaver] Loaded model from {ckpt_path}, composite_score={self.best_score:.4f}")
 
         else:
             print(f"[BestModelSaver] No best model found at {self.best_pth}")
 
-        self.best_score = ckpt.get("composite_score", self.best_score)
-        self.best_metrics_all_classes = ckpt.get("metrics_all_classes", None)
-        self.best_metrics_per_classes = ckpt.get("metrics_per_classes", None)
-        self.class_weights = ckpt.get("class_weights", None)
-
         return model
 
-    def get_best_info(self):
-        best_metrics = self.best_metrics_all_classes
-        best_metrics_per_classes = self.best_metrics_per_classes
-        composite_score = self.best_score
-        best_epoch = self.best_epoch
-        return best_metrics, best_metrics_per_classes, composite_score, best_epoch
+    def get_best_info(self, model_type='ori'):
+        assert model_type in self.saved_model_types, f"Model type {model_type} not saved"
+
+        best_metrics = self.best_metrics_all_classes.get(model_type)
+        best_metrics_per_classes = self.best_metrics_per_classes.get(model_type)
+        composite_score = self.best_score.get(model_type)
+        best_epoch = self.best_epoch.get(model_type)
+
+        return best_epoch, composite_score, best_metrics, best_metrics_per_classes
 
 
 def validate_one_epoch(epoch: int,
@@ -325,13 +392,14 @@ def validate_one_epoch(epoch: int,
                        loss_fn: nn.Module,
                        class_weights: Optional[List[float]] = None,
                        device: torch.device = torch.device('cuda'),
-                       epochs: int = 100):
+                       epochs: int = 100,
+                       model_type: str = 'ori'):
     model.eval().to(device)
     val_loss = []
     # Accumulate tp/fp/fn/tn batch-wise
     tp_all, fp_all, fn_all, tn_all = [], [], [], []
 
-    pbar = tqdm(val_loader, desc=f"Val Epoch {epoch}/{epochs - 1}", bar_format=TQDM_BAR_FORMAT)
+    pbar = tqdm(val_loader, desc=f"{model_type} - Val Epoch {epoch}/{epochs - 1}", bar_format=TQDM_BAR_FORMAT)
 
     with torch.no_grad():
         for (images, targets) in pbar:
@@ -354,7 +422,7 @@ def validate_one_epoch(epoch: int,
             fp_all.append(fp.cpu())
             fn_all.append(fn.cpu())
             tn_all.append(tn.cpu())
-            pbar.set_postfix({"val_loss": f"{(sum(val_loss) / len(val_loss)):.4f}"})
+            pbar.set_postfix({f"{model_type} model val_loss": f"{(sum(val_loss) / len(val_loss)):.4f}"})
 
         # 聚合所有批次的 tp/fp/fn/tn，得到形状为[num_images, num_classes] 的张量
         val_loss = sum(val_loss) / len(val_loss)

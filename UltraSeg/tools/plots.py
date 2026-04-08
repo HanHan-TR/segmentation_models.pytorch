@@ -12,7 +12,8 @@ def visualize_predictions(images: torch.Tensor,
                           color_map: List[List[int]] = None,
                           alpha: float = 0.6,
                           max_images: int = 16,
-                          save_path: str = None):
+                          save_path: str = None,
+                          use_roi: bool = False):
     """
     可视化语义分割推理结果与真实标签
 
@@ -36,7 +37,11 @@ def visualize_predictions(images: torch.Tensor,
     num_rows = (num_images + 1) // 2
 
     canvas_width = 1920
-    canvas_height = 1390
+    if use_roi:
+        canvas_height = 1576
+    else:
+        canvas_height = 1390
+
     canvas = np.zeros((canvas_height, canvas_width, 3), dtype=np.uint8)
 
     cell_width = canvas_width // 4

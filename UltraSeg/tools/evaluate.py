@@ -53,7 +53,9 @@ def evaluate_model(model: nn.Module,
                    color_map: List[List[int]] = None,
                    save_path: PosixPath = None,
                    max_batch: int = 8,
-                   device: torch.device = torch.device('cuda')):
+                   device: torch.device = torch.device('cuda'),
+                   model_type: str = 'ori',
+                   use_roi: bool = False):
 
     model.eval().to(device)
 
@@ -74,14 +76,15 @@ def evaluate_model(model: nn.Module,
 
             # 可视化预测结果
             if save_path is not None:
-                filename = f"batch_{batch_idx}-preds-masks.png"
+                filename = f"batch_{batch_idx}-{model_type}-preds-masks.png"
                 visualize_predictions(images=images,
                                       targets=targets,
                                       pred=pred,
                                       mean=mean,
                                       std=std,
                                       color_map=color_map,
-                                      save_path=save_path / filename)
+                                      save_path=save_path / filename,
+                                      use_roi=use_roi)
 
             pbar.set_postfix({"Save preds and masks": f"{filename}"})
 
