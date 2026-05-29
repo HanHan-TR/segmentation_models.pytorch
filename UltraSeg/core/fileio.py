@@ -151,3 +151,42 @@ def add_suffix(inputs, suffix, sep='_'):
         outputs[f'{name}{sep}{suffix}'] = value
 
     return outputs
+
+
+def dict_to_obj(dictionary):
+    """
+    将字典转换为可以通过点号访问的对象
+
+    Args:
+        dictionary (dict): 输入字典
+
+    Returns:
+        object: 可以通过点号访问的对象
+    """
+    class DictObject:
+        def __init__(self, data):
+            for key, value in data.items():
+                if isinstance(value, dict):
+                    setattr(self, key, dict_to_obj(value))
+                else:
+                    setattr(self, key, value)
+
+    return DictObject(dictionary)
+
+
+def object_to_dict(obj):
+    """
+    将对象转换为字典
+
+    Args:
+        obj (object): 输入对象
+
+    Returns:
+        dict: 转换后的字典
+    """
+    if isinstance(obj, dict):
+        return {key: object_to_dict(value) for key, value in obj.items()}
+    elif hasattr(obj, "__dict__"):
+        return {key: object_to_dict(value) for key, value in obj.__dict__.items()}
+    else:
+        return obj

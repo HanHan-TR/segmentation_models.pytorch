@@ -7,7 +7,8 @@ object_dir: SegmentationObject
 
 num_classes: 10
 
-input_size: [512, 512]
+image_height: 920
+image_width: 1270
 
 mean:
   wrist: [0.118, 0.126, 0.133]

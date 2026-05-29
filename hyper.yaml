@@ -1,0 +1,21 @@
+alpha: 0.6160412159954555
+batch_size: 16
+decoder_lr: 0.00926912914515719
+encoder_lr_factor: 0.2427676374495802
+epochs: 80
+loss_type:
+- dice
+- focal
+main_lr_type: cosine
+momentum: 0.9590908063313072
+optimizer: AdamW
+seed: 42
+warmup_epochs_ratio: 0.15
+warmup_start_factor: 0.001
+warmup_type: cosine
+weight_decay: 0.00036825561588821294
+exp_dir: res/unet-mobilenetv2_stage2/tune13
+model_cfg: UltraSeg/config/network/unet-mobilenetv2.yaml
+dataset_cfg: UltraSeg/config/dataset/wrist.yaml
+device: '3'
+load_from_ckpt: res/unet-mobilenetv2/exp2/weights/best.pth

@@ -163,10 +163,10 @@ class ModelSaver:
         # 默认权重
         self.metric_weights = metric_weights or {"loss": 0.10,
                                                  "accuracy": 0.0,
-                                                 "precision": 0.15,
+                                                 "precision": 0.1,
                                                  "recall": 0.15,
                                                  "iou": 0.30,
-                                                 "dice": 0.30,
+                                                 "dice": 0.35,
                                                  "f2": 0.0,
                                                  }
 

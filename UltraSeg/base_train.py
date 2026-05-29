@@ -15,7 +15,7 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 RANK = int(os.getenv('RANK', -1))
 
 from segmentation_models_pytorch import create_model
-from UltraSeg.core.fileio import yaml_load, yaml_save, increment_path
+from UltraSeg.core.fileio import yaml_load, yaml_save, increment_path, dict_to_obj
 from UltraSeg.core.initialize import init_random_seed, set_random_seed
 from UltraSeg.core.dataset import create_dataset
 from UltraSeg.tools.val import validate_one_epoch, ModelSaver
@@ -52,27 +52,6 @@ def parse_args():
     #     os.environ['LOCAL_RANK'] = str(args.local_rank)
 
     return args
-
-
-def dict_to_obj(dictionary):
-    """
-    将字典转换为可以通过点号访问的对象
-
-    Args:
-        dictionary (dict): 输入字典
-
-    Returns:
-        object: 可以通过点号访问的对象
-    """
-    class DictObject:
-        def __init__(self, data):
-            for key, value in data.items():
-                if isinstance(value, dict):
-                    setattr(self, key, dict_to_obj(value))
-                else:
-                    setattr(self, key, value)
-
-    return DictObject(dictionary)
 
 
 def main():

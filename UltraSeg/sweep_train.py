@@ -25,6 +25,8 @@ from UltraSeg.core.lr_scheduler import get_lr_scheduler
 from UltraSeg.tools.evaluate import evaluate_model
 from UltraSeg.core.ema import EMA
 
+from UltraSeg.logger.logger import get_environment_info, get_experiment_info
+
 
 def train(config):
 
@@ -48,6 +50,11 @@ def train(config):
     yaml_save(cfg_dir / 'model.yaml', model_cfg)
     yaml_save(cfg_dir / 'dataset.yaml', dataset_cfg)
     yaml_save(cfg_dir / 'hyper.yaml', config)
+
+    # Get environment info
+    get_environment_info()
+    # Get experiment info
+    get_experiment_info(cfg_dir=cfg_dir)
 
     # 设置随机种子, 保证算法的可复现性
     device = torch.device(f"cuda:{config.device}" if torch.cuda.is_available() else "cpu")
@@ -134,6 +141,7 @@ def train(config):
     ema = EMA(model, decay=config.ema_decay) if config.ema_decay > 0 else None
 
     for epoch in range(epochs):
+        wandb_summary = {}
         train_loss = train_one_epoch(epoch=epoch,
                                      model=model,
                                      ema=ema,
@@ -154,7 +162,6 @@ def train(config):
                    "learning_rate/decoder_decay": lr[2],
                    "learning_rate/decoder_no_decay": lr[3],
                    })
-        lr_scheduler.step()
         metrics_per_classes, metrics_all_classes, val_loss = validate_one_epoch(epoch=epoch,
                                                                                 model=model,
                                                                                 val_loader=val_loader,
@@ -163,23 +170,25 @@ def train(config):
                                                                                 device=device,
                                                                                 epochs=epochs,
                                                                                 model_type='ori')
-        wandb.log({"epoch": epoch,
-                   "loss/ori_train": train_loss,
-                   "loss/ori_val": val_loss})
 
-        ori_metrics = {}
+        wandb_summary.update({"epoch": epoch,
+                              "loss/ori_train": train_loss,
+                              "loss/ori_val": val_loss,
+                              "learning_rate/encoder_decay": lr[0],
+                              "learning_rate/encoder_no_decay": lr[1],
+                              "learning_rate/decoder_decay": lr[2],
+                              "learning_rate/decoder_no_decay": lr[3]})
+        lr_scheduler.step()
+
         for key, value in metrics_all_classes.items():  # reduction: acc: value
             for k, v in value.items():
                 new_key = f"ori_metric({key})/{k}"
-                ori_metrics.update({new_key: v})
-        wandb.log(ori_metrics)
+                wandb_summary.update({new_key: v})
 
-        per_class_metrics = {}
         for key, value in metrics_per_classes.items():
             for class_idx in range(len(value)):
                 new_key = f"ori_cls_metric({key})/c{class_idx}"
-                per_class_metrics.update({new_key: value[class_idx]})
-        wandb.log(per_class_metrics)
+                wandb_summary.update({new_key: value[class_idx]})
 
         if ema is not None:
             ema_metrics_per_classes, ema_metrics_all_classes, ema_val_loss = validate_one_epoch(epoch=epoch,
@@ -190,21 +199,17 @@ def train(config):
                                                                                                 device=device,
                                                                                                 epochs=epochs,
                                                                                                 model_type='ema')
-            wandb.log({"loss/ema_val": ema_val_loss})
+            wandb_summary.update({"loss/ema_val": ema_val_loss})
 
-            ema_ori_metrics = {}
             for key, value in ema_metrics_all_classes.items():  # reduction: acc: value
                 for k, v in value.items():
                     new_key = f"ema_metric({key})/{k}"
-                    ema_ori_metrics.update({new_key: v})
-            wandb.log(ema_ori_metrics)
+                    wandb_summary.update({new_key: v})
 
-            ema_per_class_metrics = {}
             for key, value in ema_metrics_per_classes.items():
                 for class_idx in range(len(value)):
                     new_key = f"ema_cls_metric({key})/c{class_idx}"
-                    ema_per_class_metrics.update({new_key: value[class_idx]})
-            wandb.log(ema_per_class_metrics)
+                    wandb_summary.update({new_key: value[class_idx]})
 
         composite_score = model_saver.save(epoch=epoch,
                                            model=model,
@@ -218,25 +223,26 @@ def train(config):
                                            ema_metrics_per_classes=ema_metrics_per_classes if ema is not None else None,
                                            ema_metrics_all_classes=ema_metrics_all_classes if ema is not None else None,
                                            )
-        wandb.log({"score/ori": composite_score['ori'],
-                   "score/ema": composite_score['ema'] if ema is not None else None})
+        wandb_summary.update({"score/ori": composite_score['ori'],
+                              "score/ema": composite_score['ema'] if ema is not None else None})
 
+    # end of training, log best epoch and best score for both original model and ema model (if exists)
     for model_type in model_saver.saved_model_types:
         best_epoch, best_score, best_metrics, best_metrics_per_classes = model_saver.get_best_info(model_type=model_type)
-        wandb.log({f"best_epoch/{model_type}": best_epoch,
-                   f"best_score/{model_type}": best_score})
+        wandb.log({f"best_{model_type}/epoch": best_epoch,
+                   f"best_{model_type}/score": best_score})
 
         per_class_metrics = {}
         for key, value in best_metrics_per_classes.items():
             for class_idx in range(len(value)):
-                new_key = f"{model_type}_cls_{key}/c{class_idx}"
+                new_key = f"best_{model_type}/cls_{key}/c{class_idx}"
                 per_class_metrics.update({new_key: value[class_idx]})
         wandb.log(per_class_metrics)
 
         metrics = {}
         for key, value in best_metrics.items():
             for k, v in value.items():
-                new_key = f"{model_type}_best_metric({key})/{k}"
+                new_key = f"best_{model_type}/metric({key})/{k}"
                 metrics.update({new_key: v})
         wandb.log(metrics)
 
@@ -258,10 +264,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Train a segmentation model')
     parser.add_argument('--model_cfg', type=str, default='UltraSeg/config/network/unet-mobilenetv2.yaml', help='model config file')
     parser.add_argument('--dataset_cfg', type=str, default='UltraSeg/config/dataset/wrist.yaml', help='dataset config file')
-    parser.add_argument('--input_size', type=int, default=512, help='input size for training and validation')
+    parser.add_argument('--input_size', type=int, default=384, help='input size for training and validation')
     parser.add_argument('--att_type', type=str, default=None, help='decoder attention type for training, none or scse')
     parser.add_argument('--use_roi', action='store_true', help='use roi for training')
-    parser.add_argument('--use_dual', action='store_true', help='use cutmix for training')
+    parser.add_argument('--hard_samp', action='store_true', help='use hard sampling for training')
     parser.add_argument('--sweep_cfg', type=str, default='UltraSeg/config/hyper/unet-mobilenet-ema-sweep.yaml', help='hyperparameters config file')
     parser.add_argument('--work-dir',
                         default=ROOT / 'res', help='the dir to save logs and models')
@@ -283,23 +289,23 @@ def main():
         att = 'no-att'
     else:
         att = opts.att_type
-    if opts.use_dual:
-        cutmix = 'cutmix'
-        opts.use_roi = True  # 使用 cutmix 时强制启用 roi，因为 cutmix 需要在图像上进行区域替换，启用 roi 可以让模型更关注手腕区域，提升性能
-    else:
-        cutmix = 'nomix'
 
     if opts.use_roi is False:
         roi = 'no-roi'
     else:
         roi = 'roi'
 
-    opts.name = f"{att}-{roi}-{cutmix}-{opts.input_size}-{opts.name}"
+    if opts.hard_samp:
+        hard_samp = 'hard-samp'
+    else:
+        hard_samp = 'no-hard-samp'
+
+    opts.name = f"{att}-{roi}-{hard_samp}-{opts.input_size}-{opts.name}"
     # setup output
     exp_dir = increment_path(work_dir=opts.work_dir, project=opts.project, name=opts.name)
     exp_folder_name = exp_dir.name
 
-    with wandb.init(project=opts.project, name=exp_folder_name) as run:
+    with wandb.init(project=opts.project, name=exp_folder_name, dir=exp_dir) as run:
         run.config.exp_dir = exp_dir
         run.config.model_cfg = opts.model_cfg
         run.config.dataset_cfg = opts.dataset_cfg
@@ -307,7 +313,7 @@ def main():
         run.config.input_size = opts.input_size
         run.config.decoder_attention_type = opts.att_type
         run.config.use_roi = opts.use_roi
-        run.config.use_cutmix = opts.use_dual
+        run.config.hard_samp = opts.hard_samp
         run.config.load_from_ckpt = opts.load_from_ckpt if opts.load_from_ckpt is not None else None
         train(run.config)
 
@@ -318,21 +324,21 @@ if __name__ == '__main__':
         att = 'no-att'
     else:
         att = opts.att_type
-    if opts.use_dual:
-        cutmix = 'cutmix'
-        opts.use_roi = True  # 使用 cutmix 时强制启用 roi，因为 cutmix 需要在图像上进行区域替换，启用 roi 可以让模型更关注手腕区域，提升性能
-    else:
-        cutmix = 'nomix'
 
     if opts.use_roi is False:
         roi = 'no-roi'
     else:
         roi = 'roi'
 
-    opts.name = f"{att}-{roi}-{cutmix}-{opts.input_size}-{opts.name}"
+    if opts.hard_samp:
+        hard_samp = 'hard-samp'
+    else:
+        hard_samp = 'no-hard-samp'
+
+    sweep_name = f"{att}-{roi}-{hard_samp}-{opts.input_size}"
 
     sweep_configuration = {
-        "name": opts.name,
+        "name": sweep_name,
         "method": "random",
         "metric": {"goal": "maximize",
                    "name": "score/ema"},
