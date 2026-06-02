@@ -4,14 +4,16 @@ from pathlib import Path
 import os
 import sys
 import torch
+from prettytable import PrettyTable
 import shutil
+
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]  # root directory
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 RANK = int(os.getenv('RANK', -1))
-
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from segmentation_models_pytorch import create_model
 from UltraSeg.core.fileio import yaml_load, yaml_save, increment_path
 from UltraSeg.core.initialize import init_random_seed, set_random_seed
@@ -25,7 +27,7 @@ from UltraSeg.core.lr_scheduler import get_lr_scheduler
 from UltraSeg.tools.evaluate import evaluate_model
 from UltraSeg.core.ema import EMA
 
-from UltraSeg.logger.logger import get_environment_info, get_experiment_info
+from UltraSeg.logger.logger import get_environment_info, get_experiment_info, log_write
 
 
 def train(config):
@@ -46,6 +48,8 @@ def train(config):
 
     # Load configs
     model_cfg, dataset_cfg = yaml_load(config.model_cfg), yaml_load(config.dataset_cfg)
+    data_classes = dataset_cfg['classes']
+
     # save configs
     yaml_save(cfg_dir / 'model.yaml', model_cfg)
     yaml_save(cfg_dir / 'dataset.yaml', dataset_cfg)
@@ -65,29 +69,37 @@ def train(config):
     train_dataset = create_dataset(dataset_cfg,
                                    input_size=config.input_size,
                                    split='train',
-                                   use_cutmix=config.use_cutmix,
-                                   use_roi=config.use_roi)
+                                   use_roi=config.use_roi,
+                                   hard_samp=config.hard_samp,
+                                   augment_version=config.augment_version)
     val_dataset = create_dataset(dataset_cfg,
                                  input_size=config.input_size,
                                  split='val',
-                                 use_cutmix=False,  # 不对验证集使用 cutmix 数据增强
-                                 use_roi=config.use_roi)
-    train_loader = torch.utils.data.DataLoader(train_dataset,
-                                               batch_size=config.batch_size,
-                                               shuffle=True,
-                                               num_workers=8,
-                                               pin_memory=True)
+                                 use_roi=config.use_roi,
+                                 hard_samp=False,
+                                 augment_version=config.augment_version)
+    if config.hard_samp:
+        sampler = WeightedRandomSampler(weights=torch.DoubleTensor(train_dataset.sample_weights),
+                                        num_samples=len(train_dataset.sample_weights),
+                                        replacement=True)
+
+        train_loader = DataLoader(train_dataset,
+                                  batch_size=config.batch_size,
+                                  sampler=sampler,
+                                  num_workers=8,
+                                  pin_memory=True)
+    else:
+        train_loader = DataLoader(train_dataset,
+                                  batch_size=config.batch_size,
+                                  shuffle=True,
+                                  num_workers=8,
+                                  pin_memory=True)
+
     val_loader = torch.utils.data.DataLoader(val_dataset,
                                              batch_size=config.batch_size,
                                              shuffle=False,
                                              num_workers=8,
                                              pin_memory=True)
-    class_weights = compute_class_weights_from_loader(train_loader,
-                                                      dataset_cfg['num_classes'],
-                                                      method="sqrt",
-                                                      eps=1e-6,
-                                                      normalize=True).tolist()
-    print(f"Class weights: {class_weights}")
 
     # Create model saver
     model_saver = ModelSaver(best_model_pth=best_model_pth,
@@ -139,6 +151,7 @@ def train(config):
 
     # Create EMA model
     ema = EMA(model, decay=config.ema_decay) if config.ema_decay > 0 else None
+    metrics_row = ["accuracy", "precision", "recall", "iou", "dice", "f2score"]
 
     for epoch in range(epochs):
         wandb_summary = {}
@@ -166,7 +179,7 @@ def train(config):
                                                                                 model=model,
                                                                                 val_loader=val_loader,
                                                                                 loss_fn=loss_fn,
-                                                                                class_weights=class_weights,
+                                                                                class_weights=train_dataset.class_rarity,
                                                                                 device=device,
                                                                                 epochs=epochs,
                                                                                 model_type='ori')
@@ -180,36 +193,62 @@ def train(config):
                               "learning_rate/decoder_no_decay": lr[3]})
         lr_scheduler.step()
 
+        ori_table = PrettyTable()
+        ori_table.field_names = ["reduction"] + metrics_row
         for key, value in metrics_all_classes.items():  # reduction: acc: value
-            for k, v in value.items():
+            data_row = []
+            for k in metrics_row:
+                v = value[k]
+                data_row.append(f"{v:.4f}")
                 new_key = f"ori_metric({key})/{k}"
                 wandb_summary.update({new_key: v})
+            ori_table.add_row([key] + data_row)
+        log_write(f"Epoch {epoch} - ori Model Validation Metrics:\n{ori_table}\n")
 
+        ori_cls_table = PrettyTable()
+        ori_cls_table.field_names = ["metric"] + data_classes
         for key, value in metrics_per_classes.items():
+            data_rows = [key]
             for class_idx in range(len(value)):
                 new_key = f"ori_cls_metric({key})/c{class_idx}"
+                data_rows.append(f"{value[class_idx]:.4f}")
                 wandb_summary.update({new_key: value[class_idx]})
+            ori_cls_table.add_row(data_rows)
+        log_write(f"Epoch {epoch} - ori Model Validation Metrics Per Class:\n{ori_cls_table}\n")
 
         if ema is not None:
             ema_metrics_per_classes, ema_metrics_all_classes, ema_val_loss = validate_one_epoch(epoch=epoch,
                                                                                                 model=ema.model(),
                                                                                                 val_loader=val_loader,
                                                                                                 loss_fn=loss_fn,
-                                                                                                class_weights=class_weights,
+                                                                                                class_weights=train_dataset.class_rarity,
                                                                                                 device=device,
                                                                                                 epochs=epochs,
                                                                                                 model_type='ema')
             wandb_summary.update({"loss/ema_val": ema_val_loss})
 
+            ema_table = PrettyTable()
+            ema_table.field_names = ["reduction"] + metrics_row
             for key, value in ema_metrics_all_classes.items():  # reduction: acc: value
-                for k, v in value.items():
+                data_row = []
+                for k in metrics_row:
+                    v = value[k]
+                    data_row.append(f"{v:.4f}")
                     new_key = f"ema_metric({key})/{k}"
                     wandb_summary.update({new_key: v})
+                ema_table.add_row([key] + data_row)
+            log_write(f"Epoch {epoch} - ema Model Validation Metrics:\n{ema_table}\n")
 
+            ema_cls_table = PrettyTable()
+            ema_cls_table.field_names = ["metric"] + data_classes
             for key, value in ema_metrics_per_classes.items():
+                data_rows = [key]
                 for class_idx in range(len(value)):
                     new_key = f"ema_cls_metric({key})/c{class_idx}"
+                    data_rows.append(f"{value[class_idx]:.4f}")
                     wandb_summary.update({new_key: value[class_idx]})
+                ema_cls_table.add_row(data_rows)
+            log_write(f"Epoch {epoch} - ema Model Validation Metrics Per Class:\n{ema_cls_table}\n")
 
         composite_score = model_saver.save(epoch=epoch,
                                            model=model,
@@ -227,23 +266,40 @@ def train(config):
                               "score/ema": composite_score['ema'] if ema is not None else None})
 
     # end of training, log best epoch and best score for both original model and ema model (if exists)
+    wandb.log(wandb_summary)
+
     for model_type in model_saver.saved_model_types:
         best_epoch, best_score, best_metrics, best_metrics_per_classes = model_saver.get_best_info(model_type=model_type)
         wandb.log({f"best_{model_type}/epoch": best_epoch,
                    f"best_{model_type}/score": best_score})
 
         per_class_metrics = {}
+        table_cls = PrettyTable()
+        table_cls.field_names = ["metric"] + data_classes
         for key, value in best_metrics_per_classes.items():
+            data_rows = [key]
             for class_idx in range(len(value)):
                 new_key = f"best_{model_type}/cls_{key}/c{class_idx}"
                 per_class_metrics.update({new_key: value[class_idx]})
+                data_rows.append(f"{value[class_idx]:.4f}")
+            table_cls.add_row(data_rows)
+        log_write(f"Best {model_type} Model in Epoch {best_epoch} Validation Metrics Per Class:\n{table_cls}\n")
+
         wandb.log(per_class_metrics)
 
         metrics = {}
+        table = PrettyTable()
+        table.field_names = ["reduction"] + metrics_row
         for key, value in best_metrics.items():
-            for k, v in value.items():
+            data_row = []
+            for k in metrics_row:
+                v = value[k]
+                data_row.append(f"{v:.4f}")
                 new_key = f"best_{model_type}/metric({key})/{k}"
                 metrics.update({new_key: v})
+            table.add_row([key] + data_row)
+
+        log_write(f"Best {model_type} Model in Epoch {best_epoch} Validation Metrics:\n{table}\n")
         wandb.log(metrics)
 
     #  Evaluate best model on validation set
@@ -266,15 +322,17 @@ def parse_args():
     parser.add_argument('--dataset_cfg', type=str, default='UltraSeg/config/dataset/wrist.yaml', help='dataset config file')
     parser.add_argument('--input_size', type=int, default=384, help='input size for training and validation')
     parser.add_argument('--att_type', type=str, default=None, help='decoder attention type for training, none or scse')
-    parser.add_argument('--use_roi', action='store_true', help='use roi for training')
-    parser.add_argument('--hard_samp', action='store_true', help='use hard sampling for training')
+    parser.add_argument('--use_roi', action='store_true', default=False, help='use roi for training')
+    parser.add_argument('--hard_samp', action='store_true', default=False, help='use hard sampling for training')
+    parser.add_argument('--augment_version', type=int, default=2, help='augment version for training')
+
     parser.add_argument('--sweep_cfg', type=str, default='UltraSeg/config/hyper/unet-mobilenet-ema-sweep.yaml', help='hyperparameters config file')
     parser.add_argument('--work-dir',
                         default=ROOT / 'res', help='the dir to save logs and models')
     parser.add_argument('--project',
-                        default='ultraseg', help='the project name to save logs')
+                        default='wrist-ultraseg', help='the project name to save logs')
     parser.add_argument('--name', default='p', help='save to work-dir/project/name, and wandb run name')
-    parser.add_argument('--device', default='3', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--load_from_ckpt', type=str, default=None, help='load from checkpoint')
     parser.add_argument('--sweep_count', type=int, default=60, help='sweep count for wandb agent')
 
@@ -315,6 +373,7 @@ def main():
         run.config.use_roi = opts.use_roi
         run.config.hard_samp = opts.hard_samp
         run.config.load_from_ckpt = opts.load_from_ckpt if opts.load_from_ckpt is not None else None
+        run.config.augment_version = opts.augment_version
         train(run.config)
 
 

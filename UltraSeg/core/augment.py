@@ -1,64 +1,23 @@
 import cv2
 import numpy as np
 import albumentations as A
-from albumentations.core.transforms_interface import DualTransform
 
 
-class CutMix(DualTransform):
-    def __init__(self, p=0.5, always_apply=False, cut_ratio_range=(0.45, 0.75)):
-        super().__init__(always_apply, p)
-        self.cut_ratio_range = cut_ratio_range
-
-    def _get_cut_coordinates(self, h, w):
-        """计算裁剪区域的坐标
-
-        Args:
-            h: 图像高度
-            w: 图像宽度
-
-        Returns:
-            x1, x2, y1, y2: 裁剪区域的边界坐标
-        """
-        min_ratio, max_ratio = self.cut_ratio_range
-        cut_h = np.random.randint(int(h * min_ratio), int(h * max_ratio))
-        cut_w = np.random.randint(int(w * min_ratio), int(w * max_ratio))
-        cx = np.random.randint(cut_h // 2, h - cut_h // 2)
-        cy = np.random.randint(cut_w // 2, w - cut_w // 2)
-        x1, x2 = cx - cut_h // 2, cx + cut_h // 2
-        y1, y2 = cy - cut_w // 2, cy + cut_w // 2
-        return x1, x2, y1, y2
-
-    def apply(self, img, **params):
-        img2 = params['image2']
-        h, w = img.shape[:2]
-        x1, x2, y1, y2 = self._get_cut_coordinates(h, w)
-        # 区域替换
-        img[x1:x2, y1:y2] = img2[x1:x2, y1:y2]
-        return img
-
-    def apply_to_mask(self, mask, **params):
-        # 掩码同步区域替换
-        mask2 = params['mask2']
-        h, w = mask.shape[:2]
-        x1, x2, y1, y2 = self._get_cut_coordinates(h, w)
-        mask[x1:x2, y1:y2] = mask2[x1:x2, y1:y2]
-        return mask
+def add_speckle_noise(image, **kwargs):
+    img_float = image.astype(np.float32)
+    noise = np.random.randn(*img_float.shape)
+    noisy_img = img_float + img_float * 0.08 * noise
+    return np.clip(noisy_img, 0, 255).astype(np.uint8)
 
 
 def data_augment_pipeline(input_size=[512, 512],
                           mean=[0.485, 0.456, 0.406],
                           std=[0.229, 0.224, 0.225],
                           seed=42,
-                          use_roi=False,
-                          use_cutmix=False):
-    if use_roi and use_cutmix:
-        cut_mix_p = 0.45
-    else:
-        cut_mix_p = 0.0
+                          version=2):
 
     train_pipeline = A.Compose([
         A.Resize(height=input_size[0], width=input_size[1]),
-        CutMix(p=cut_mix_p),
         A.HorizontalFlip(p=0.3),
         A.VerticalFlip(p=0.3),
         A.Affine(rotate=(-5.0, 5.0),
@@ -91,16 +50,100 @@ def data_augment_pipeline(input_size=[512, 512],
         A.GaussNoise(std_range=(0.0, 0.06), p=0.08),
         A.GaussianBlur(blur_limit=(3, 5), sigma_limit=(0.2, 1.0), p=0.1),
 
-        A.ToFloat(max_value=255.0),
-        A.Normalize(mean=tuple(mean), std=tuple(std), max_pixel_value=1.0),
+        A.Normalize(mean=tuple(mean), std=tuple(std)),
+        A.ToTensorV2()
+    ], seed=seed)
+
+    train_pipeline2 = A.Compose([
+        # ==============================
+        # 第一阶段：空间几何形态 (Spatial)
+        # ==============================
+        A.OneOf([
+            A.RandomResizedCrop(
+                size=(input_size[0], input_size[1]),
+                scale=(0.7, 1.0),
+                ratio=(0.85, 1.15),
+                p=1.0,
+            ),
+            A.Resize(height=input_size[0], width=input_size[1], p=1.0),
+        ], p=1.0),
+
+        A.Affine(
+            scale=(0.7, 1.2),
+            translate_percent={"x": (-0.05, 0.05), "y": (-0.05, 0.05)},
+            rotate=(-15, 15),
+            p=0.4
+        ),
+        A.HorizontalFlip(p=0.5),
+
+        A.OneOf([
+            A.ElasticTransform(alpha=40, sigma=6, p=1.0),
+            A.GridDistortion(num_steps=5, distort_limit=(-0.3, 0.3), p=1.0),
+            A.OpticalDistortion(distort_limit=(-0.3, 0.3), p=1.0)
+        ], p=0.3),
+
+        # ==============================
+        # 第二阶段：物理成像退化
+        # ==============================
+        # 1. 探头底噪 (Noise)
+        A.OneOf([
+            A.GaussNoise(std_range=(10.0 / 255, 30.0 / 255), p=1.0),
+            A.Lambda(image=add_speckle_noise, p=1.0),
+        ], p=0.2),
+
+        # 2. 声束扩散模糊 (Blur - 模糊会晕染上面的噪声)
+        A.OneOf([
+            A.GaussianBlur(blur_limit=(3, 5), p=1.0),
+            A.MotionBlur(blur_limit=(3, 5), p=1.0),
+        ], p=0.2),
+
+        # 3. 机器基础增益 (Brightness/Contrast)
+        A.RandomBrightnessContrast(
+            brightness_limit=(-0.15, 0.15),
+            contrast_limit=(-0.15, 0.15),
+            p=0.3
+        ),
+
+        # 4. 探头物理分辨率极限 (Simulate Low Res)
+        # 🌟 必须在 Gamma 之前执行插值！
+        A.OneOf([
+            A.Downscale(scale_range=(0.5, 0.85), p=1.0),
+            A.Downscale(scale_range=(0.25, 0.5), p=1.0),
+        ], p=0.2),
+
+        # 5. 显示器非线性渲染 (Gamma)
+        A.OneOf([
+            # 正常 Gamma
+            A.RandomGamma(gamma_limit=(80, 150), p=1.0),
+            # ⭐ nnU-Net Invert Gamma（真正版本）
+            A.Compose([
+                A.InvertImg(p=1.0),
+                A.RandomGamma(gamma_limit=(80, 150), p=1.0),
+                A.InvertImg(p=1.0),
+            ])
+        ], p=0.2),
+
+        # ==============================
+        # 第三阶段：防遮挡与正则化
+        # ==============================
+        A.CoarseDropout(
+            num_holes_range=(1, 3),
+            hole_height_range=(1, max(2, input_size[0] // 12)),
+            hole_width_range=(1, max(2, input_size[1] // 12)),
+            fill=128,
+            p=0.1
+        ),
+        A.Normalize(mean=tuple(mean), std=tuple(std)),
         A.ToTensorV2()
     ], seed=seed)
 
     val_pipeline = A.Compose([
         A.Resize(height=input_size[0], width=input_size[1]),
-        A.ToFloat(max_value=255.0),
-        A.Normalize(mean=tuple(mean), std=tuple(std), max_pixel_value=1.0),
+        A.Normalize(mean=tuple(mean), std=tuple(std)),
         A.ToTensorV2()
     ], seed=seed)
 
-    return train_pipeline, val_pipeline
+    if version == 2:
+        return train_pipeline2, val_pipeline
+    else:
+        return train_pipeline, val_pipeline

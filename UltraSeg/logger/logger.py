@@ -17,11 +17,11 @@ from UltraSeg.core.fileio import yaml_load, object_to_dict
 TQDM_BAR_FORMAT = '{l_bar}{bar:16}{r_bar}'
 
 
-def log_write(file=None, message=''):
-    if file is None:
+def log_write(message='', logfile: Optional[str] = None):
+    if logfile is None:
         print(message)
     else:
-        with open(file, 'a') as f:
+        with open(logfile, 'a') as f:
             f.write(message)
 
 
@@ -53,44 +53,44 @@ def get_environment_info(logfile=None):
     result = "\n".join(f"{key + ':':<25} {value}" for key, value in env_info.items())
     result += '\n'
 
-    title = "=============================== env info ====================================== \n"
-    log_write(logfile, title)
-    log_write(logfile, result)
+    title = "=============================== environment info ====================================== \n"
+    log_write(title, logfile=logfile)
+    log_write(result, logfile=logfile)
 
 
 def get_experiment_info(cfg_dir: PosixPath, logfile: Optional[str] = None):
     dataset_cfg = yaml_load(cfg_dir / 'dataset.yaml')
     title = "=============================== dataset info ====================================== \n"
-    log_write(logfile, title)
+    log_write(title, logfile=logfile)
 
     for key, value in dataset_cfg.items():
         if isinstance(value, list):
-            log_write(logfile, f"{key}:")
+            log_write(f"{key}:", logfile=logfile)
             for item in value:
                 if isinstance(item, list):
                     item_str = ', '.join(str(i) for i in item)
-                    log_write(logfile, f"  - {item_str}")
+                    log_write(f"  - {item_str}", logfile=logfile)
                 else:
-                    log_write(logfile, f"  - {item}")
+                    log_write(f"  - {item}", logfile=logfile)
         else:
-            log_write(logfile, f"{key  + ':':<20} {value}")
+            log_write(f"{key  + ':':<20} {value}", logfile=logfile)
 
     title = "=============================== model info ====================================== \n"
     model_cfg = yaml_load(cfg_dir / 'model.yaml')
-    log_write(logfile, title)
+    log_write(title, logfile=logfile)
     for key, value in model_cfg.items():
-        log_write(logfile, f"{key  + ':':<28} {value}")
+        log_write(f"{key  + ':':<28} {value}", logfile=logfile)
 
     config_dict = yaml_load(cfg_dir / 'hyper.yaml')
-    title = "=============================== training info ====================================== \n"
-    log_write(logfile, title)
+    title = "=============================== training hyperparameters ====================================== \n"
+    log_write(title, logfile=logfile)
     config_dict.pop('model_cfg')
     config_dict.pop('dataset_cfg')
     for key, value in config_dict.items():
         if key != 'exp_dir':
-            log_write(logfile, f"{key  + ':':<28} {value}")
+            log_write(f"{key  + ':':<28} {value}", logfile=logfile)
 
-    log_write(logfile, f"\nThis running is saved at: {config_dict['exp_dir']}\n")
+    log_write(f"\nThis running is saved at: {config_dict['exp_dir']}\n", logfile=logfile)
 
     exp_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_write(logfile, f"Experiment Start Time:   {exp_time}\n")
+    log_write(f"Training Start Time:   {exp_time}\n", logfile=logfile)

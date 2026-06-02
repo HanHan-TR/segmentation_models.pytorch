@@ -34,9 +34,12 @@ class Wrist_Ultrasound_Dataset(Dataset):
                  std: list = [0.229, 0.224, 0.225],
                  classes: list = None,
                  color_map: list = None,
+                 num_classes: int = None,
                  mode: str = 'train',
-                 use_cutmix: bool = False,
-                 use_roi: bool = False):
+                 augment_version: int = 2,
+                 use_roi: bool = False,
+                 rare_classes: list = None,
+                 hard_samp: bool = False):
         super().__init__()
         self.data_root = data_root
         self.img_dir = img_dir
@@ -52,17 +55,29 @@ class Wrist_Ultrasound_Dataset(Dataset):
         train_pipeline, val_pipeline = data_augment_pipeline(input_size=input_size,
                                                              mean=mean,
                                                              std=std,
-                                                             use_roi=use_roi,
-                                                             use_cutmix=use_cutmix)
+                                                             version=augment_version)
         self.augment_pipeline = train_pipeline if mode == 'train' else val_pipeline
+
+        if num_classes is not None:
+            self.num_classes = num_classes
 
         if classes is not None:
             self.classes = classes
 
         if color_map is not None:
             self.color_map = color_map
+
         self.use_roi = use_roi
-        self.use_cutmix = use_cutmix
+        self.rare_classes = rare_classes if rare_classes is not None else None
+        self.hard_samp = hard_samp
+
+        self.compute_class_pixel_frequency()
+        self.compute_class_rarity_weights(ignore_index=-1)
+
+        if self.hard_samp and self.mode == 'train':
+            self.compute_sample_weights(ignore_index=-1)
+        elif self.mode != 'train':
+            self.hard_samp = False
 
     def __len__(self):
         return len(self.img_paths)
@@ -78,25 +93,8 @@ class Wrist_Ultrasound_Dataset(Dataset):
             img = img[ROI["ymin"]:ROI["ymax"], ROI["xmin"]:ROI["xmax"]]
             mask = mask[ROI["ymin"]:ROI["ymax"], ROI["xmin"]:ROI["xmax"]]
 
-        if self.use_cutmix:
-            # 随机抽取另一张图像，用于CutMix增强
-            idx2 = np.random.randint(0, len(self.img_paths))
-            # print(f"CutMix: {img_path.name} <--> {self.img_paths[idx2].name}")
-            img2 = cv.imread(str(self.img_paths[idx2]))
-            img2 = cv.cvtColor(img2, cv.COLOR_BGR2RGB)
-            mask2 = cv.imread(str(self.mask_paths[idx2]), cv.IMREAD_GRAYSCALE)
-            if self.use_roi:
-                img2 = img2[ROI["ymin"]:ROI["ymax"], ROI["xmin"]:ROI["xmax"]]
-                mask2 = mask2[ROI["ymin"]:ROI["ymax"], ROI["xmin"]:ROI["xmax"]]
-
-            # 数据增强
-            augmented = self.augment_pipeline(image=img,
-                                              mask=mask,
-                                              image2=img2,
-                                              mask2=mask2)
-        else:
-            # 数据增强
-            augmented = self.augment_pipeline(image=img, mask=mask)
+        # 数据增强
+        augmented = self.augment_pipeline(image=img, mask=mask)
 
         image = augmented['image']
         mask = augmented['mask']
@@ -110,22 +108,102 @@ class Wrist_Ultrasound_Dataset(Dataset):
     def get_std(self):
         return self.std
 
+    def compute_class_pixel_frequency(self):
+        """
+        统计整个训练集每个类别的像素频率。
+        """
+        class_counter = np.zeros(self.num_classes, dtype=np.int64)
+
+        for mask_path in self.mask_paths:
+            mask = cv.imread(str(mask_path), cv.IMREAD_GRAYSCALE)
+            if mask is None:
+                raise ValueError(f"Failed to read mask: {mask_path}")
+
+            binc = np.bincount(mask.reshape(-1), minlength=self.num_classes)
+            class_counter += binc
+
+        total_pixels = class_counter.sum()
+        class_freq = class_counter / (total_pixels + 1e-12)
+
+        self.class_freq = class_freq
+        self.class_counter = class_counter
+
+    def compute_class_rarity_weights(self, ignore_index=None):
+        """
+        根据全局类别频率，计算类别稀有性权重。
+        这里用温和形式：1 / log(1.1 + freq)
+
+        class_freq: np.ndarray, shape [num_classes]
+        """
+        rarity = 1.0 / np.log(1.1 + self.class_freq + 1e-12)
+
+        if ignore_index is not None:
+            rarity[ignore_index] = 0.0
+
+        # 可选：归一化到均值为1附近
+        valid = rarity > 0
+        rarity[valid] = rarity[valid] / rarity[valid].mean()
+
+        self.class_rarity = rarity
+
+    def compute_sample_weights(self,
+                               ignore_index=0,
+                               alpha=2.0):
+
+        if self.rare_classes is None:
+            fg_freq = self.class_freq.copy()
+            fg_freq[ignore_index] = np.inf
+            threshold = np.median(fg_freq[np.isfinite(fg_freq)])
+            rare_classes = set(np.where(self.class_freq < threshold)[0].tolist())
+            rare_classes.discard(ignore_index)
+        else:
+            rare_classes = set(self.rare_classes)
+
+        sample_weights = []
+
+        for mask_path in self.mask_paths:
+            mask = cv.imread(mask_path, cv.IMREAD_GRAYSCALE)
+            if mask is None:
+                raise ValueError(f"Failed to read mask: {mask_path}")
+
+            classes_in_mask = set(np.unique(mask).tolist())
+            weight = 1.0
+
+            for c in classes_in_mask:
+                if c in rare_classes:
+                    weight += alpha * self.class_rarity[c]
+
+            sample_weights.append(float(weight))
+
+        sample_weights = np.array(sample_weights, dtype=np.float64)
+
+        # 归一化，避免数值跨度过大
+        sample_weights = sample_weights / sample_weights.mean()
+
+        self.sample_weights = sample_weights.tolist()
+
 
 def create_dataset(dataset_cfg,
                    input_size=None,
-                   normal_data='imagenet',
                    split='train',
-                   use_cutmix: bool = False,
-                   use_roi: bool = False):
+                   rare_classes=None,
+                   hard_samp=False,
+                   use_roi: bool = False,
+                   augment_version: int = 2):
+
+    normalize_type = dataset_cfg['normalize_type']
     dataset = Wrist_Ultrasound_Dataset(data_root=dataset_cfg['data_root'],
                                        img_dir=dataset_cfg['img_dir'],
                                        mask_dir=dataset_cfg['mask_dir'],
                                        input_size=[input_size, input_size] if input_size is not None else dataset_cfg['input_size'],
-                                       mean=dataset_cfg['mean'][normal_data],
-                                       std=dataset_cfg['std'][normal_data],
+                                       mean=dataset_cfg['mean'][normalize_type],
+                                       std=dataset_cfg['std'][normalize_type],
+                                       num_classes=dataset_cfg['num_classes'],
                                        classes=dataset_cfg['classes'],
                                        color_map=dataset_cfg['color_map'],
                                        mode=split,
-                                       use_cutmix=use_cutmix,
+                                       augment_version=augment_version,
+                                       rare_classes=rare_classes,
+                                       hard_samp=hard_samp,
                                        use_roi=use_roi)
     return dataset

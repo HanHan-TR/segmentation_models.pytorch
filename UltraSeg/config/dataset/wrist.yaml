@@ -1,4 +1,4 @@
-data_root: /home/wanghan/work/dataset/wrist
+data_root: /home/t_wanghan/work/data/WristUltrasoundDataset
 img_dir: JPEGImages
 mask_dir: Masks
 
@@ -18,17 +18,19 @@ std:
   wrist: [0.151, 0.160, 0.168]
   imagenet: [0.229, 0.224, 0.225]
 
+normalize_type: imagenet
+
 classes: [
-  background,
-  Flexor-Pollicis-Longus,
-  Flexor-Digitorum-Superficialis,
-  Flexor-Digitorum-Profundus,
-  Palmaris-Longus-Tendon,
-  Pronator-Quadratus,
-  Flexor-Carpi-Radialis,
-  Radial-Artery,
-  Median-Nerve,
-  Brachioradialis
+  0—背景,
+  1-拇长屈肌,
+  2-指浅屈肌,
+  3-指深屈肌,
+  4-掌长肌腱,
+  5-旋前方肌,
+  6-桡侧腕屈肌,
+  7-桡动脉,
+  8-正中神经,
+  9-肱桡肌
 ]
 
 color_map: [
