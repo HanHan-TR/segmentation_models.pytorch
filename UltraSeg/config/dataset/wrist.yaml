@@ -6,7 +6,8 @@ class_rgb_dir: SegmentationClass
 object_dir: SegmentationObject
 
 num_classes: 10
-
+num_training_samples: 632
+num_validation_samples: 271
 image_height: 920
 image_width: 1270
 

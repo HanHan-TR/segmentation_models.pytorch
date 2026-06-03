@@ -55,11 +55,6 @@ def train(config):
     yaml_save(cfg_dir / 'dataset.yaml', dataset_cfg)
     yaml_save(cfg_dir / 'hyper.yaml', config)
 
-    # Get environment info
-    get_environment_info()
-    # Get experiment info
-    get_experiment_info(cfg_dir=cfg_dir)
-
     # 设置随机种子, 保证算法的可复现性
     device = torch.device(f"cuda:{config.device}" if torch.cuda.is_available() else "cpu")
     seed = init_random_seed(seed=config.seed, device=device)
@@ -80,7 +75,7 @@ def train(config):
                                  augment_version=config.augment_version)
     if config.hard_samp:
         sampler = WeightedRandomSampler(weights=torch.DoubleTensor(train_dataset.sample_weights),
-                                        num_samples=len(train_dataset.sample_weights),
+                                        num_samples=len(train_dataset.sample_weights) * 2,  # 进行过采样，迭代器的长度是原来的两倍
                                         replacement=True)
 
         train_loader = DataLoader(train_dataset,
@@ -106,15 +101,28 @@ def train(config):
                              last_model_pth=last_model_pth,
                              ema_best_model_pth=ema_best_model_pth,
                              ema_last_model_pth=ema_last_model_pth,
-                             metric_reduction="weighted",)
+                             metric_reduction="weighted",
+                             arch=model_cfg['arch'],
+                             encoder_name=model_cfg['encoder_name'],
+                             decoder_attention_type=config.decoder_attention_type,
+                             in_channels=3,
+                             input_size=config.input_size,
+                             num_classes=dataset_cfg['num_classes'],
+                             mean=train_dataset.get_mean(),
+                             std=train_dataset.get_std(),
+                             )
     # Create model
     model = create_model(arch=model_cfg['arch'],
                          encoder_name=model_cfg['encoder_name'],
-                         encoder_weights=model_cfg['encoder_weights'],
+                         encoder_weights=model_cfg['encoder_init_weights'],
                          decoder_attention_type=config.decoder_attention_type,
                          in_channels=3,
                          classes=dataset_cfg['num_classes'])
 
+    # Get environment info
+    get_environment_info()
+    # Get experiment info
+    get_experiment_info(cfg_dir=cfg_dir, model=model, input_size=config.input_size, logfile=None)
     # ! Load checkpoint if specified  for training of stage 2. In stage 2, we use the best model from stage 1 as the initial model.
     # ! In stage 1, the config.load_from_ckpt should be set to None, and the model will be initialized with
     # ! imagenet weights (as specified by model_cfg['encoder_weights']).
@@ -264,10 +272,10 @@ def train(config):
                                            )
         wandb_summary.update({"score/ori": composite_score['ori'],
                               "score/ema": composite_score['ema'] if ema is not None else None})
+        wandb.log(wandb_summary)
 
     # end of training, log best epoch and best score for both original model and ema model (if exists)
-    wandb.log(wandb_summary)
-
+    log_write("\n=================================== ⭐️ Best Model Validation Metrics ========================================= \n")
     for model_type in model_saver.saved_model_types:
         best_epoch, best_score, best_metrics, best_metrics_per_classes = model_saver.get_best_info(model_type=model_type)
         wandb.log({f"best_{model_type}/epoch": best_epoch,
@@ -323,7 +331,7 @@ def parse_args():
     parser.add_argument('--input_size', type=int, default=384, help='input size for training and validation')
     parser.add_argument('--att_type', type=str, default=None, help='decoder attention type for training, none or scse')
     parser.add_argument('--use_roi', action='store_true', default=False, help='use roi for training')
-    parser.add_argument('--hard_samp', action='store_true', default=False, help='use hard sampling for training')
+    parser.add_argument('--hard_samp', action='store_true', default=True, help='use hard sampling for training')
     parser.add_argument('--augment_version', type=int, default=2, help='augment version for training')
 
     parser.add_argument('--sweep_cfg', type=str, default='UltraSeg/config/hyper/unet-mobilenet-ema-sweep.yaml', help='hyperparameters config file')

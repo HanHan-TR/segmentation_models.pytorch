@@ -147,7 +147,15 @@ class ModelSaver:
                  loss_transform: str = "exp",  # "exp" or "reciprocal"
                  loss_alpha: float = 1.0,
                  metric_reduction: str = "weighted",
-                 class_names: List[str] = None):
+                 class_names: List[str] = None,
+                 arch: str = 'unet',
+                 encoder_name: str = 'mobilenet_v2',
+                 decoder_attention_type: Optional[str] = None,
+                 in_channels: int = 3,
+                 num_classes: int = 10,
+                 input_size: Union[List[int], List[int]] = None,
+                 mean: List[float] = None,
+                 std: List[float] = None):
 
         self.min_delta = min_delta
         self.higher_is_better = higher_is_better
@@ -196,6 +204,17 @@ class ModelSaver:
         self.best_metrics_per_classes = {'ori': {},
                                          'ema': {}}  # 同时跟踪原始模型和EMA模型的每类指标
         self.saved_model_types = []
+        self.meta_info = {}
+        self.meta_info.update({
+            "arch": arch,
+            "encoder_name": encoder_name,
+            "decoder_attention_type": decoder_attention_type,
+            "in_channels": in_channels,
+            "num_classes": num_classes,
+            "input_size": input_size,
+            "mean": mean,
+            "std": std,
+        })
 
     def _loss_to_score(self, val_loss):
         """
@@ -298,6 +317,7 @@ class ModelSaver:
                            "class_weights": class_weights if class_weights is not None else None,
                            "loss_transform": self.loss_transform,
                            }
+        last_state_dict.update(meta_info=self.meta_info)  # 将模型的meta信息也保存到state_dict中
         # 保存最近一个epoch的模型
         torch.save(last_state_dict, str(self.last_pth['ori']))
 
@@ -314,6 +334,7 @@ class ModelSaver:
                                    "class_weights": class_weights if class_weights is not None else None,
                                    "loss_transform": self.loss_transform,
                                    }
+            last_ema_state_dict.update(meta_info=self.meta_info)  # 将模型的meta信息也保存到state_dict中
             if self.last_pth['ema'] is not None:
                 torch.save(last_ema_state_dict, str(self.last_pth['ema']))
 
@@ -340,6 +361,7 @@ class ModelSaver:
                              "class_weights": class_weights if class_weights is not None else None,
                              "loss_transform": self.loss_transform,
                              }
+                save_dict.update(meta_info=self.meta_info)  # 将模型的meta信息也保存到state_dict中
                 # 保存模型
                 torch.save(save_dict, str(self.best_pth[model_type]))
                 print(f"[BestModelSaver] Saved best {model_type} model to path {self.best_pth[model_type]}")

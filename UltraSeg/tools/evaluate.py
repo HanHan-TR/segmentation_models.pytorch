@@ -76,7 +76,8 @@ def evaluate_model(model: nn.Module,
 
             # 可视化预测结果
             if save_path is not None:
-                filename = f"batch_{batch_idx}-{model_type}-preds-masks.png"
+
+                filename = f"{model_type}-batch_{batch_idx}-preds-masks.png"
                 visualize_predictions(images=images,
                                       targets=targets,
                                       pred=pred,
