@@ -59,7 +59,7 @@ def evaluate_model(model: nn.Module,
 
     model.eval().to(device)
 
-    pbar = tqdm(val_loader, desc="Evaluate Model on Validation Set", bar_format=TQDM_BAR_FORMAT)
+    pbar = tqdm(val_loader, desc="Model inference on Validation Set", bar_format=TQDM_BAR_FORMAT)
 
     with torch.no_grad():
         for batch_idx, (images, targets) in enumerate(pbar):

@@ -4,8 +4,8 @@ seed:
 
 epochs:
   distribution: q_uniform
-  min: 50
-  max: 150
+  min: 80
+  max: 180
   q: 20
 
 batch_size:
@@ -26,14 +26,14 @@ momentum:
 
 # warmup
 warmup_epochs_ratio:
-  values: [0.1, 0.2, 0.3]
+  values: [0.2, 0.3]
 
 warmup_type:
   value: cosine  
 #  [linear, cosine, exponential]
  
 warmup_start_factor:
-  values: [0.01, 0.001]
+  value: 0.01
 
 
 # main lr

@@ -5,6 +5,7 @@ import os
 import sys
 import torch
 from prettytable import PrettyTable
+import wcwidth
 import shutil
 
 FILE = Path(__file__).resolve()
@@ -49,6 +50,7 @@ def train(config):
     # Load configs
     model_cfg, dataset_cfg = yaml_load(config.model_cfg), yaml_load(config.dataset_cfg)
     data_classes = dataset_cfg['classes']
+    data_classes = [f"{item:^8}" for item in data_classes]
 
     # save configs
     yaml_save(cfg_dir / 'model.yaml', model_cfg)
@@ -203,6 +205,7 @@ def train(config):
 
         ori_table = PrettyTable()
         ori_table.field_names = ["reduction"] + metrics_row
+        ori_table._string_width = wcwidth.wcswidth
         for key, value in metrics_all_classes.items():  # reduction: acc: value
             data_row = []
             for k in metrics_row:
@@ -215,6 +218,7 @@ def train(config):
 
         ori_cls_table = PrettyTable()
         ori_cls_table.field_names = ["metric"] + data_classes
+        ori_cls_table._string_width = wcwidth.wcswidth
         for key, value in metrics_per_classes.items():
             data_rows = [key]
             for class_idx in range(len(value)):
@@ -237,6 +241,7 @@ def train(config):
 
             ema_table = PrettyTable()
             ema_table.field_names = ["reduction"] + metrics_row
+            ema_table._string_width = wcwidth.wcswidth
             for key, value in ema_metrics_all_classes.items():  # reduction: acc: value
                 data_row = []
                 for k in metrics_row:
@@ -249,6 +254,7 @@ def train(config):
 
             ema_cls_table = PrettyTable()
             ema_cls_table.field_names = ["metric"] + data_classes
+            ema_cls_table._string_width = wcwidth.wcswidth
             for key, value in ema_metrics_per_classes.items():
                 data_rows = [key]
                 for class_idx in range(len(value)):
@@ -277,19 +283,6 @@ def train(config):
     # end of training, log best epoch and best score for both original model and ema model (if exists)
     log_write("\n=================================== ⭐️ Best Model Validation Metrics ========================================= \n")
 
-    #  Evaluate best model on validation set
-    for model_type in model_saver.saved_model_types:
-        model_saver.load_best_ckpt(model=model, model_type=model_type)
-        evaluate_model(model=model,
-                       val_loader=val_loader,
-                       mean=val_dataset.get_mean(),
-                       std=val_dataset.get_std(),
-                       save_path=plot_dir,
-                       max_batch=8,
-                       device=device,
-                       model_type=model_type,
-                       use_roi=config.use_roi)
-
     for model_type in model_saver.saved_model_types:
         best_epoch, best_score, best_metrics, best_metrics_per_classes = model_saver.get_best_info(model_type=model_type)
         wandb.log({f"best_{model_type}/epoch": best_epoch,
@@ -298,6 +291,7 @@ def train(config):
         per_class_metrics = {}
         table_cls = PrettyTable()
         table_cls.field_names = ["metric"] + data_classes
+        table_cls._string_width = wcwidth.wcswidth
         for key, value in best_metrics_per_classes.items():
             data_rows = [key]
             for class_idx in range(len(value)):
@@ -312,6 +306,7 @@ def train(config):
         metrics = {}
         table = PrettyTable()
         table.field_names = ["reduction"] + metrics_row
+        table._string_width = wcwidth.wcswidth
         for key, value in best_metrics.items():
             data_row = []
             for k in metrics_row:
@@ -324,6 +319,19 @@ def train(config):
         log_write(f"Best {model_type} Model in Epoch {best_epoch} Validation Metrics:\n{table}\n")
         wandb.log(metrics)
 
+    #  Evaluate best model on validation set
+    for model_type in model_saver.saved_model_types:
+        model_saver.load_best_ckpt(model=model, model_type=model_type)
+        evaluate_model(model=model,
+                       val_loader=val_loader,
+                       mean=val_dataset.get_mean(),
+                       std=val_dataset.get_std(),
+                       save_path=plot_dir,
+                       max_batch=8,
+                       device=device,
+                       model_type=model_type,
+                       use_roi=config.use_roi)
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a segmentation model')
@@ -331,17 +339,17 @@ def parse_args():
     parser.add_argument('--dataset_cfg', type=str, default='UltraSeg/config/dataset/wrist.yaml', help='dataset config file')
     parser.add_argument('--input_size', type=int, default=384, help='input size for training and validation')
     parser.add_argument('--att_type', type=str, default=None, help='decoder attention type for training, none or scse')
-    parser.add_argument('--use_roi', action='store_true', default=False, help='use roi for training')
-    parser.add_argument('--hard_samp', action='store_true', default=True, help='use hard sampling for training')
+    parser.add_argument('--use_roi', action='store_true', help='use roi for training')
+    parser.add_argument('--hard_samp', action='store_true', help='use hard sampling for training')
     parser.add_argument('--augment_version', type=int, default=2, help='augment version for training')
 
     parser.add_argument('--sweep_cfg', type=str, default='UltraSeg/config/hyper/unet-mobilenet-ema-sweep.yaml', help='hyperparameters config file')
     parser.add_argument('--work-dir',
                         default=ROOT / 'res', help='the dir to save logs and models')
     parser.add_argument('--project',
-                        default='wrist-ultraseg', help='the project name to save logs')
+                        default='wrist-seg', help='the project name to save logs')
     parser.add_argument('--name', default='p', help='save to work-dir/project/name, and wandb run name')
-    parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--device', default='1', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--load_from_ckpt', type=str, default=None, help='load from checkpoint')
     parser.add_argument('--sweep_count', type=int, default=60, help='sweep count for wandb agent')
 
@@ -350,7 +358,7 @@ def parse_args():
     return args
 
 
-def main():
+def sweep_main():
     opts = parse_args()
     if opts.att_type is None:
         att = 'no-att'
@@ -418,5 +426,5 @@ if __name__ == '__main__':
     sweep_id = wandb.sweep(sweep=sweep_configuration,
                            entity="wanghan-tr-tuorenmedical",
                            project=opts.project)
-    wandb.agent(sweep_id, function=main, count=opts.sweep_count)
-    main()
+    wandb.agent(sweep_id, function=sweep_main, count=opts.sweep_count)
+    sweep_main()
