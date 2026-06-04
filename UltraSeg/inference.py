@@ -92,9 +92,10 @@ def inference(model, img_tensor, device):
     """
     执行推理
     """
-    model.eval()
+    model.to(device).eval()
+    img_tensor = img_tensor.to(device)
+
     with torch.no_grad():
-        img_tensor = img_tensor.to(device)
         logits = model(img_tensor)
         probs = torch.softmax(logits, dim=1)
         pred = torch.argmax(probs, dim=1).long()
@@ -146,7 +147,7 @@ def main():
                         help='输入图像路径或包含图像的文件夹路径')
     parser.add_argument('--output', default='./inference_results', help='输出文件夹路径')
     parser.add_argument('--checkpoint', type=str,
-                        default='/home/t_wanghan/work/segmentation_models.pytorch/res/wrist-ultraseg/no-att-no-roi-hard-samp-384-p7/weights/ema_best.pth',
+                        default='/home/t_wanghan/work/segmentation_models.pytorch/res/wrist-ultraseg/no-att-no-roi-hard-samp-384-p10/weights/ema_best.pth',
                         help='训练好的模型checkpoint路径')
     parser.add_argument('--model_cfg', default='UltraSeg/config/network/unet-mobilenetv2.yaml', help='模型配置文件路径')
     parser.add_argument('--dataset_cfg', default='UltraSeg/config/dataset/wrist.yaml', help='数据集配置文件路径')

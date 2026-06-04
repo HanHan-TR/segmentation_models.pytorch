@@ -7,9 +7,8 @@ from torch.optim import Optimizer
 from tqdm import tqdm
 from copy import deepcopy
 from typing import Union, Optional, List, Dict
-import wandb
 from pathlib import PosixPath, Path
-from UltraSeg.logger.logger import TQDM_BAR_FORMAT
+from UltraSeg.logger.logger import TQDM_BAR_FORMAT, log_write
 import segmentation_models_pytorch as smp
 from UltraSeg.core.lr_scheduler import Scheduler
 
@@ -364,7 +363,7 @@ class ModelSaver:
                 save_dict.update(meta_info=self.meta_info)  # 将模型的meta信息也保存到state_dict中
                 # 保存模型
                 torch.save(save_dict, str(self.best_pth[model_type]))
-                print(f"[BestModelSaver] Saved best {model_type} model to path {self.best_pth[model_type]}")
+                log_write(f"🚀 Epoch {epoch}: save improved {model_type} model to path {self.best_pth[model_type]}")
 
                 if model_type not in self.saved_model_types:
                     self.saved_model_types.append(model_type)
@@ -390,10 +389,10 @@ class ModelSaver:
 
             if "model_state_dict" in ckpt:
                 model.load_state_dict(ckpt["model_state_dict"])
-                print(f"[BestModelSaver] Loaded model from {ckpt_path}, composite_score={self.best_score:.4f}")
+                log_write(f"Load the best {model_type} model from {ckpt_path}")
 
         else:
-            print(f"[BestModelSaver] No best model found at {self.best_pth}")
+            log_write(f"No best {model_type} model found at {ckpt_path}")
 
         return model
 

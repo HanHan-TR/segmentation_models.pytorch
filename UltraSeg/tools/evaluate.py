@@ -71,12 +71,8 @@ def evaluate_model(model: nn.Module,
             probs = torch.softmax(logits, dim=1)
             pred = torch.argmax(probs, dim=1).long()  # 预测值
 
-            if batch_idx >= max_batch:
-                break
-
-            # 可视化预测结果
-            if save_path is not None:
-
+            if batch_idx < max_batch and save_path is not None:
+                # 可视化预测结果
                 filename = f"{model_type}-batch_{batch_idx}-preds-masks.png"
                 visualize_predictions(images=images,
                                       targets=targets,

@@ -108,7 +108,7 @@ def get_environment_info(logfile=None):
     result = "\n".join(f"{key + ':':<25} {value}" for key, value in env_info.items())
     result += '\n'
 
-    title = "=============================== environment info ====================================== \n"
+    title = "================================= environment info ========================================\n"
     log_write(title, logfile=logfile)
     log_write(result, logfile=logfile)
 
@@ -118,7 +118,7 @@ def get_experiment_info(cfg_dir: PosixPath,
                         input_size: Union[int, List[int]] = [384, 384],
                         logfile: Optional[str] = None):
     dataset_cfg = yaml_load(cfg_dir / 'dataset.yaml')
-    title = "=============================== dataset info ====================================== \n"
+    title = "=================================== dataset info ==========================================\n"
     log_write(title, logfile=logfile)
 
     for key, value in dataset_cfg.items():
@@ -133,7 +133,7 @@ def get_experiment_info(cfg_dir: PosixPath,
         else:
             log_write(f"{key  + ':':<20} {value}", logfile=logfile)
 
-    title = "=============================== model info ====================================== \n"
+    title = "=================================== model info ===========================================\n"
     model_cfg = yaml_load(cfg_dir / 'model.yaml')
     log_write(title, logfile=logfile)
     for key, value in model_cfg.items():
@@ -142,7 +142,7 @@ def get_experiment_info(cfg_dir: PosixPath,
     log_model_info(model, input_size=input_size, logfile=logfile)
 
     config_dict = yaml_load(cfg_dir / 'hyper.yaml')
-    title = "=============================== training hyperparameters ====================================== \n"
+    title = "============================== training hyperparameters ==================================\n"
     log_write(title, logfile=logfile)
     config_dict.pop('model_cfg')
     config_dict.pop('dataset_cfg')
@@ -153,4 +153,4 @@ def get_experiment_info(cfg_dir: PosixPath,
     log_write(f"\nThis running is saved at: {config_dict['exp_dir']}\n", logfile=logfile)
 
     exp_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_write(f"Training Start Time:   {exp_time}\n", logfile=logfile)
+    log_write(f"Training Start Time:   {exp_time}\n\n", logfile=logfile)

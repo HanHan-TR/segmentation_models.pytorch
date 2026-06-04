@@ -276,6 +276,20 @@ def train(config):
 
     # end of training, log best epoch and best score for both original model and ema model (if exists)
     log_write("\n=================================== ⭐️ Best Model Validation Metrics ========================================= \n")
+
+    #  Evaluate best model on validation set
+    for model_type in model_saver.saved_model_types:
+        model_saver.load_best_ckpt(model=model, model_type=model_type)
+        evaluate_model(model=model,
+                       val_loader=val_loader,
+                       mean=val_dataset.get_mean(),
+                       std=val_dataset.get_std(),
+                       save_path=plot_dir,
+                       max_batch=8,
+                       device=device,
+                       model_type=model_type,
+                       use_roi=config.use_roi)
+
     for model_type in model_saver.saved_model_types:
         best_epoch, best_score, best_metrics, best_metrics_per_classes = model_saver.get_best_info(model_type=model_type)
         wandb.log({f"best_{model_type}/epoch": best_epoch,
@@ -309,19 +323,6 @@ def train(config):
 
         log_write(f"Best {model_type} Model in Epoch {best_epoch} Validation Metrics:\n{table}\n")
         wandb.log(metrics)
-
-    #  Evaluate best model on validation set
-    for model_type in model_saver.saved_model_types:
-        model_saver.load_best_ckpt(model=model, model_type=model_type)
-        evaluate_model(model=model,
-                       val_loader=val_loader,
-                       mean=val_dataset.get_mean(),
-                       std=val_dataset.get_std(),
-                       save_path=plot_dir,
-                       max_batch=8,
-                       device=device,
-                       model_type=model_type,
-                       use_roi=config.use_roi)
 
 
 def parse_args():
