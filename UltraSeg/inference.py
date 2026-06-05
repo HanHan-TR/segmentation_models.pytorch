@@ -136,7 +136,6 @@ def visualize_result(original_img, pred_mask, gt_mask, color_map, alpha=0.6):
 
     # 水平拼接
     combined = np.hstack((pred_overlay, gt_overlay))
-
     return combined
 
 
