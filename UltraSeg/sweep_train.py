@@ -48,7 +48,15 @@ def train(config):
     cfg_dir.mkdir(parents=True, exist_ok=True)
 
     # Load configs
-    model_cfg, dataset_cfg = yaml_load(config.model_cfg), yaml_load(config.dataset_cfg)
+    if config.model_cfg is None:
+        model_cfg = {}
+        model_cfg['arch'] = config.arch
+        model_cfg['encoder_name'] = config.encoder_name
+        model_cfg['encoder_init_weights'] = config.encoder_init_weights
+    else:
+        model_cfg = yaml_load(config.model_cfg)
+
+    dataset_cfg = yaml_load(config.dataset_cfg)
     data_classes = dataset_cfg['classes']
     data_classes = [f"{item:^8}" for item in data_classes]
 
@@ -335,7 +343,10 @@ def train(config):
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a segmentation model')
-    parser.add_argument('--model_cfg', type=str, default='UltraSeg/config/network/unet-mobilenetv2.yaml', help='model config file')
+    parser.add_argument('--model_cfg', type=str, default=None, help='model config file')
+    parser.add_argument('--arch', type=str, default='unet', help='architecture of the model')
+    parser.add_argument('--encoder_name', type=str, default='mobilenet_v2', help='encoder name for the model')
+    parser.add_argument('--encoder_init_weights', type=str, default='imagenet', help='initialize encoder weights')
     parser.add_argument('--dataset_cfg', type=str, default='UltraSeg/config/dataset/wrist.yaml', help='dataset config file')
     parser.add_argument('--input_size', type=int, default=384, help='input size for training and validation')
     parser.add_argument('--att_type', type=str, default=None, help='decoder attention type for training, none or scse')
@@ -375,14 +386,17 @@ def sweep_main():
     else:
         hard_samp = 'no-hard-samp'
 
-    opts.name = f"{att}-{roi}-{hard_samp}-{opts.input_size}-{opts.name}"
+    opts.name = f"{opts.encoder_name}-{att}-{roi}-{hard_samp}-{opts.input_size}-{opts.name}"
     # setup output
     exp_dir = increment_path(work_dir=opts.work_dir, project=opts.project, name=opts.name)
     exp_folder_name = exp_dir.name
 
     with wandb.init(project=opts.project, name=exp_folder_name, dir=exp_dir) as run:
         run.config.exp_dir = exp_dir
-        run.config.model_cfg = opts.model_cfg
+        run.config.model_cfg = opts.model_cfg if opts.model_cfg is not None else None
+        run.config.arch = opts.arch if opts.arch is not None else None
+        run.config.encoder_name = opts.encoder_name if opts.encoder_name is not None else None
+        run.config.encoder_init_weights = opts.encoder_init_weights if opts.encoder_init_weights is not None else None
         run.config.dataset_cfg = opts.dataset_cfg
         run.config.device = opts.device
         run.config.input_size = opts.input_size
@@ -411,7 +425,7 @@ if __name__ == '__main__':
     else:
         hard_samp = 'no-hard-samp'
 
-    sweep_name = f"{att}-{roi}-{hard_samp}-{opts.input_size}"
+    sweep_name = f"{opts.encoder_name}-{att}-{roi}-{hard_samp}-{opts.input_size}"
 
     sweep_configuration = {
         "name": sweep_name,

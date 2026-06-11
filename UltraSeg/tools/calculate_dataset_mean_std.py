@@ -41,7 +41,7 @@ def calculate_mean_std(image_root_folder):
 
 
 if __name__ == "__main__":
-    image_root_folder = "/home/wanghan/work/dataset/wrist/JPEGImages/train"  # 替换为实际路径
+    image_root_folder = "/home/t_wanghan/work/data/Huai/images/train"  # 替换为实际路径
     mean, std = calculate_mean_std(image_root_folder)
     # 打印结果
     print("\n" + "=" * 50)

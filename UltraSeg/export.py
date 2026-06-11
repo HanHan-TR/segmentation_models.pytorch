@@ -5,6 +5,8 @@ import openvino as ov
 import nncf
 import os
 import sys
+import onnx
+from onnxsim import simplify
 from pathlib import Path, PosixPath
 from typing import Union, Optional, Callable, Any
 
@@ -44,6 +46,13 @@ def convert_to_onnx(model: nn.Module,
                       dynamic_axes=None
                       )
     print(f"ONNX模型已保存到: {output_path}")
+    model = onnx.load(str(output_path))
+    graph = model.graph
+    graph.input[0].type.tensor_type.shape.dim[0].dim_value = 1
+    model, check = simplify(model)
+    print("已对ONNX模型进行简化")
+    assert check, "简化后的ONNX模型验证失败"
+    onnx.save(model, str(output_path))
 
 
 def convert_onnx_to_openvino(onnx_path: Union[str, PosixPath],
@@ -113,6 +122,56 @@ def create_calibration_dataset(dataset_cfg: dict,
     return nncf.Dataset(limited_dataset, transform_func)
 
 
+def create_validation_dataset(dataset_cfg: dict,
+                              input_size: int,
+                              split: str = 'val',
+                              max_samples: int = 100) -> nncf.Dataset:
+    """
+    创建用于验证的数据集（包含标签）
+
+    Args:
+        dataset_cfg: 数据集配置字典
+        input_size: 输入图像尺寸
+        split: 数据集分割（train/val）
+        max_samples: 最大样本数
+
+    Returns:
+        NNCF Dataset对象，每个元素是(image, label)元组
+    """
+    dataset = create_dataset(
+        dataset_cfg,
+        input_size=input_size,
+        split=split,
+        augment_version=2
+    )
+
+    # 限制样本数量
+    class LimitedDataset:
+        def __init__(self, dataset, limit):
+            self.dataset = dataset
+            self.limit = min(limit, len(dataset))
+
+        def __len__(self):
+            return self.limit
+
+        def __getitem__(self, index):
+            image, label = self.dataset[index]
+            return image, label
+
+    limited_dataset = LimitedDataset(dataset, max_samples)
+
+    # 定义转换函数：将tensor转换为numpy
+    def transform_func(data_item):
+        image, label = data_item
+        if isinstance(image, torch.Tensor):
+            image = image.numpy()
+        if isinstance(label, torch.Tensor):
+            label = label.numpy()
+        return image, label
+
+    return nncf.Dataset(limited_dataset, transform_func)
+
+
 def quantize_int8(ov_model: ov.Model,
                   calibration_dataset: nncf.Dataset,
                   output_path: Union[str, PosixPath]):
@@ -155,36 +214,42 @@ def quantize_accuracy_aware(ov_model: ov.Model,
     """
     # 如果未提供评估函数，使用默认的评估函数
     if evaluator_fn is None:
-        def default_evaluator(model: ov.Model, dataset: nncf.Dataset) -> float:
-            compiled_model = ov.compile_model(model)
+        def default_evaluator(model, dataset: nncf.Dataset) -> float:
+            # 检查是否已经是CompiledModel
+            if isinstance(model, ov.CompiledModel):
+                compiled_model = model
+            else:
+                compiled_model = ov.compile_model(model)
             correct = 0
             total = 0
             for data_item in dataset:
-                input_data = data_item
+                input_data, label = data_item
+
+                # 输入数据可能已经是numpy数组（由create_validation_dataset转换）
                 if isinstance(input_data, torch.Tensor):
                     input_data = input_data.numpy()
+                if isinstance(label, torch.Tensor):
+                    label = label.numpy()
+
                 input_data = input_data[None, ...]  # 添加batch维度
                 output = compiled_model(input_data)[0]
                 pred = output.argmax(axis=1)
-                # 默认评估：计算非背景类别的准确率
-                correct += (pred != 0).sum()
+
+                # 正确的准确率计算：预测与标签匹配的像素数
+                correct += (pred == label).sum()
                 total += pred.size
+
             return correct / total if total > 0 else 0.0
 
         evaluator_fn = default_evaluator
 
-    # 创建量化参数
-    params = nncf.AwareQuantizationParameters(
-        max_drop=max_drop,
-        evaluator=evaluator_fn
-    )
-
     # 执行Accuracy-aware量化
-    quantized_model = nncf.quantize_with_accuracy_aware(
+    quantized_model = nncf.quantize_with_accuracy_control(
         ov_model,
         calibration_dataset,
         validation_dataset,
-        params
+        validation_fn=evaluator_fn,
+        max_drop=max_drop
     )
 
     ov.save_model(quantized_model, str(output_path))
@@ -197,7 +262,7 @@ def main():
 
     # 基础参数
     parser.add_argument('--checkpoint', type=str,
-                        default='/home/t_wanghan/work/segmentation_models.pytorch/res/wrist-seg/no-att-no-roi-hard-samp-384-p/weights/ema_best.pth',
+                        default='res/wrist-seg/timm-tf_efficientnet_lite1-no-att-no-roi-hard-samp-512-p22/weights/ema_best.pth',
                         help='PyTorch模型权重文件路径（.pth）')
     parser.add_argument('--dataset_cfg', type=str,
                         default='UltraSeg/config/dataset/wrist.yaml',
@@ -211,12 +276,12 @@ def main():
                         help='是否将OpenVINO模型压缩为FP16格式')
 
     # 量化参数
-    parser.add_argument('--quantize', action='store_true', default=True,
+    parser.add_argument('--quantize', action='store_true', default=False,
                         help='是否对模型进行量化')
-    parser.add_argument('--quantization_type', type=str, default='int8',
+    parser.add_argument('--quantization_type', type=str, default='accuracy_aware',
                         choices=['int8', 'accuracy_aware'],
                         help='量化类型：int8（默认）或accuracy_aware')
-    parser.add_argument('--max_drop', type=float, default=0.01,
+    parser.add_argument('--max_drop', type=float, default=0.02,
                         help='Accuracy-aware量化的最大精度下降容忍度')
     parser.add_argument('--calibration_samples', type=int, default=300,
                         help='校准数据集样本数')
@@ -263,8 +328,8 @@ def main():
             quantize_int8(ov_model, calibration_dataset, quantized_path)
 
         elif args.quantization_type == 'accuracy_aware':
-            # 创建验证数据集（使用训练集的一部分）
-            validation_dataset = create_calibration_dataset(
+            # 创建验证数据集（包含标签）
+            validation_dataset = create_validation_dataset(
                 dataset_cfg,
                 input_size,
                 split='val',

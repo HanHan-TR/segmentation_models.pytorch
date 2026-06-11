@@ -22,7 +22,7 @@ ROI = {
 }
 
 
-class Wrist_Ultrasound_Dataset(Dataset):
+class Ultrasound_Dataset(Dataset):
     def __init__(self,
                  data_root: str,
                  img_dir: str,
@@ -192,18 +192,20 @@ def create_dataset(dataset_cfg,
                    augment_version: int = 2):
 
     normalize_type = dataset_cfg['normalize_type']
-    dataset = Wrist_Ultrasound_Dataset(data_root=dataset_cfg['data_root'],
-                                       img_dir=dataset_cfg['img_dir'],
-                                       mask_dir=dataset_cfg['mask_dir'],
-                                       input_size=[input_size, input_size] if input_size is not None else dataset_cfg['input_size'],
-                                       mean=dataset_cfg['mean'][normalize_type],
-                                       std=dataset_cfg['std'][normalize_type],
-                                       num_classes=dataset_cfg['num_classes'],
-                                       classes=dataset_cfg['classes'],
-                                       color_map=dataset_cfg['color_map'],
-                                       mode=split,
-                                       augment_version=augment_version,
-                                       rare_classes=rare_classes,
-                                       hard_samp=hard_samp,
-                                       use_roi=use_roi)
+    dataset = Ultrasound_Dataset(data_root=dataset_cfg['data_root'],
+                                 img_dir=dataset_cfg['img_dir'],
+                                 mask_dir=dataset_cfg['mask_dir'],
+                                 img_suffix=dataset_cfg['img_suffix'],
+                                 mask_suffix=dataset_cfg['mask_suffix'],
+                                 input_size=[input_size, input_size] if input_size is not None else dataset_cfg['input_size'],
+                                 mean=dataset_cfg['mean'][normalize_type],
+                                 std=dataset_cfg['std'][normalize_type],
+                                 num_classes=dataset_cfg['num_classes'],
+                                 classes=dataset_cfg['classes'],
+                                 color_map=dataset_cfg['color_map'],
+                                 mode=split,
+                                 augment_version=augment_version,
+                                 rare_classes=rare_classes,
+                                 hard_samp=hard_samp,
+                                 use_roi=use_roi)
     return dataset
