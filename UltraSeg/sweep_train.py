@@ -116,8 +116,8 @@ def train(config):
                              encoder_name=model_cfg['encoder_name'],
                              decoder_attention_type=config.decoder_attention_type,
                              in_channels=3,
-                             input_size=config.input_size,
                              num_classes=dataset_cfg['num_classes'],
+                             input_size=config.input_size,
                              mean=train_dataset.get_mean(),
                              std=train_dataset.get_std(),
                              )
@@ -175,6 +175,7 @@ def train(config):
         wandb_summary = {}
         train_loss = train_one_epoch(epoch=epoch,
                                      model=model,
+                                     color_map=dataset_cfg['color_map'],
                                      ema=ema,
                                      train_loader=train_loader,
                                      loss_fn=loss_fn,
@@ -197,6 +198,7 @@ def train(config):
                                                                                 model=model,
                                                                                 val_loader=val_loader,
                                                                                 loss_fn=loss_fn,
+                                                                                num_classes=dataset_cfg['num_classes'],
                                                                                 class_weights=train_dataset.class_rarity,
                                                                                 device=device,
                                                                                 epochs=epochs,
@@ -241,6 +243,7 @@ def train(config):
                                                                                                 model=ema.model(),
                                                                                                 val_loader=val_loader,
                                                                                                 loss_fn=loss_fn,
+                                                                                                num_classes=dataset_cfg['num_classes'],
                                                                                                 class_weights=train_dataset.class_rarity,
                                                                                                 device=device,
                                                                                                 epochs=epochs,
@@ -334,6 +337,7 @@ def train(config):
                        val_loader=val_loader,
                        mean=val_dataset.get_mean(),
                        std=val_dataset.get_std(),
+                       color_map=dataset_cfg['color_map'],
                        save_path=plot_dir,
                        max_batch=8,
                        device=device,
@@ -347,7 +351,7 @@ def parse_args():
     parser.add_argument('--arch', type=str, default='unet', help='architecture of the model')
     parser.add_argument('--encoder_name', type=str, default='mobilenet_v2', help='encoder name for the model')
     parser.add_argument('--encoder_init_weights', type=str, default='imagenet', help='initialize encoder weights')
-    parser.add_argument('--dataset_cfg', type=str, default='UltraSeg/config/dataset/wrist.yaml', help='dataset config file')
+    parser.add_argument('--dataset_cfg', type=str, default='UltraSeg/config/dataset/huai.yaml', help='dataset config file')
     parser.add_argument('--input_size', type=int, default=384, help='input size for training and validation')
     parser.add_argument('--att_type', type=str, default=None, help='decoder attention type for training, none or scse')
     parser.add_argument('--use_roi', action='store_true', help='use roi for training')
@@ -358,7 +362,7 @@ def parse_args():
     parser.add_argument('--work-dir',
                         default=ROOT / 'res', help='the dir to save logs and models')
     parser.add_argument('--project',
-                        default='wrist-seg', help='the project name to save logs')
+                        default='huai-seg', help='the project name to save logs')
     parser.add_argument('--name', default='p', help='save to work-dir/project/name, and wandb run name')
     parser.add_argument('--device', default='1', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--load_from_ckpt', type=str, default=None, help='load from checkpoint')

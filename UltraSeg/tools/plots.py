@@ -28,10 +28,7 @@ def visualize_predictions(images: torch.Tensor,
         max_images: 最多显示的图像数量
         save_path: 保存路径，如果为None则不保存
     """
-    if color_map is None:
-        color_map = [[0, 0, 0], [32, 32, 185], [102, 245, 102], [214, 41, 69],
-                     [218, 70, 218], [177, 70, 92], [156, 63, 156], [165, 32, 59],
-                     [204, 204, 59], [194, 87, 140]]
+    assert color_map is not None, "color_map must be provided"
 
     num_images = min(images.shape[0], max_images)
     num_rows = (num_images + 1) // 2

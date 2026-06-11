@@ -411,6 +411,7 @@ def validate_one_epoch(epoch: int,
                        model: nn.Module,
                        val_loader: DataLoader,
                        loss_fn: nn.Module,
+                       num_classes: int,
                        class_weights: Optional[List[float]] = None,
                        device: torch.device = torch.device('cuda'),
                        epochs: int = 100,
@@ -437,7 +438,7 @@ def validate_one_epoch(epoch: int,
             tp, fp, fn, tn = smp.metrics.get_stats(output=pred,
                                                    target=targets.long(),
                                                    mode='multiclass',
-                                                   num_classes=10,
+                                                   num_classes=num_classes,
                                                    ignore_index=-1)
             tp_all.append(tp.cpu())
             fp_all.append(fp.cpu())
