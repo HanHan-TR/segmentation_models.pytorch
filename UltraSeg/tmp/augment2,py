@@ -10,7 +10,7 @@ class LabelGuidedCropAlbumentations(DualTransform):
     基于 Albumentations 框架的标签指导裁剪组件
     """
 
-    def __init__(self, height, width, p_rare=0.9, rare_classes=None, always_apply=False, p=1.0):
+    def __init__(self, height, width, p_rare=0.5, rare_classes=None, always_apply=False, p=1.0):
         super().__init__(always_apply, p)
         self.height = height
         self.width = width
@@ -32,10 +32,10 @@ class LabelGuidedCropAlbumentations(DualTransform):
         if random.random() < self.p_rare and self.rare_classes is not None:
             present_rare_classes = [c for c in self.rare_classes if c in mask]
             if present_rare_classes:
-                target_cls = random.choice(present_rare_classes)  # 随机选择一个罕见类别
+                target_cls = random.choice(present_rare_classes)
                 coords = np.argwhere(mask == target_cls)
                 if len(coords) > 0:
-                    # 计算该组织的质心坐标，由于将组织区域看成均匀分布，所以质心坐标就是形心坐标
+                    # 计算该组织的中心点
                     cy, cx = coords.mean(axis=0).astype(int)
 
                     # 计算裁剪框左上角，并做边界安全防越界处理
@@ -99,46 +99,40 @@ def ultrasound_in_place_copy_paste(src_image,
                                    blend=True,
                                    intensity_correction=True,
                                    shadow_extension=True,
-                                   shadow_pixels=15,
+                                   shadow_drop_to_bottom=True,
+                                   shadow_pixels=200,
+                                   shadow_intensity=0.6,
+                                   ignore_index=-1,
                                    speckle_uniform=True,
-                                   speckle_std=0.04):
+                                   speckle_std=0.03):
     if (target_class not in src_mask) or (target_class in dst_mask):
-        # 两个跳过条件：
-        # • 源掩码中不存在目标类别 → 无东西可复制
-        # • 目标掩码中已存在目标类别 → 避免重叠/冲突
-        # 满足任一条件则直接返回目标图像的副本，不做任何修改
         return dst_image.copy(), dst_mask.copy()
 
+    h, w = src_image.shape[:2]
     obj_mask = (src_mask == target_class).astype(np.uint8)
     out_image = dst_image.copy()
     out_mask = dst_mask.copy()
 
-    paste_mask = obj_mask.copy()
+    shadow_mask = np.zeros_like(obj_mask)
     if shadow_extension:
-        shadow = np.zeros_like(obj_mask)
-        rows = np.any(obj_mask, axis=1)
-        if rows.any():
-            top_row = np.argmax(rows)
-            bottom_row = len(rows) - np.argmax(rows[::-1])
-            shadow_top = bottom_row
-            shadow_bottom = min(obj_mask.shape[0], bottom_row + shadow_pixels)
-            if shadow_bottom > shadow_top:
-                cols_in_obj = np.any(obj_mask[top_row:bottom_row], axis=0)
-                col_start = np.argmax(cols_in_obj)
-                col_end = len(cols_in_obj) - np.argmax(cols_in_obj[::-1])
-                shadow[shadow_top:shadow_bottom, col_start:col_end] = 1
-                shadow = cv2.GaussianBlur(shadow, (5, 5), 0)
-                shadow = (shadow > 0.3).astype(np.uint8)
-                shadow[obj_mask == 1] = 0
-                paste_mask = np.clip(obj_mask + shadow, 0, 1).astype(np.uint8)
+        non_zero_rows = np.where(obj_mask, np.arange(h)[:, None], -1)
+        bottom_rows = np.max(non_zero_rows, axis=0)
+        for c in range(w):
+            if bottom_rows[c] != -1:
+                start_y = bottom_rows[c] + 1
+                end_y = h if shadow_drop_to_bottom else min(h, start_y + shadow_pixels)
+                if start_y < end_y:
+                    shadow_mask[start_y:end_y, c] = 1
 
     src_adjusted = src_image.copy()
     if intensity_correction:
         kernel_dilate = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        neighborhood = cv2.dilate(paste_mask, kernel_dilate, iterations=10)
-        neighborhood[paste_mask == 1] = 0
+        neighborhood = cv2.dilate(obj_mask, kernel_dilate, iterations=8)
+        neighborhood[obj_mask == 1] = 0
+        if shadow_extension:
+            neighborhood[shadow_mask == 1] = 0
 
-        src_pixels = src_image[paste_mask == 1].astype(np.float64)
+        src_pixels = src_image[obj_mask == 1].astype(np.float64)
         dst_pixels = dst_image[neighborhood == 1].astype(np.float64)
 
         if len(src_pixels) > 0 and len(dst_pixels) > 0:
@@ -152,52 +146,56 @@ def ultrasound_in_place_copy_paste(src_image,
             adjusted = normalized * dst_std + dst_mean
             src_adjusted = np.clip(adjusted, 0, 255).astype(np.uint8)
 
-    out_mask[paste_mask == 1] = target_class
+    out_mask[obj_mask == 1] = target_class
+    if shadow_extension:
+        out_mask[shadow_mask == 1] = ignore_index
 
     if blend:
-        use_seamless = (
-            len(out_image.shape) == 3
-            and out_image.shape[2] == 3
-            and paste_mask.sum() > 0
-        )
-        if use_seamless:
-            try:
-                coords = np.argwhere(paste_mask > 0)
-                center_y = int(coords[:, 0].mean())
-                center_x = int(coords[:, 1].mean())
-                center = (center_x, center_y)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        dilated_obj = cv2.dilate(obj_mask, kernel, iterations=2)
+        if shadow_extension:
+            dilated_obj[shadow_mask == 1] = 0
+        blur_obj_mask = cv2.GaussianBlur(dilated_obj.astype(float), (7, 7), 0)
 
-                mask_255 = (paste_mask * 255).astype(np.uint8)
-                out_image = cv2.seamlessClone(
-                    src_adjusted, out_image, mask_255, center, cv2.NORMAL_CLONE
-                )
-            except cv2.error:
-                use_seamless = False
+        if len(out_image.shape) == 3:
+            blur_obj_mask = np.expand_dims(blur_obj_mask, axis=-1)
+            obj_mask_3d = np.expand_dims(obj_mask, axis=-1)
+        else:
+            obj_mask_3d = obj_mask
 
-        if not use_seamless:
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-            dilated_mask = cv2.dilate(paste_mask, kernel, iterations=1)
-            blur_mask = cv2.GaussianBlur(dilated_mask.astype(float), (5, 5), 0)
+        mask_fg = obj_mask_3d.astype(float) + (1.0 - obj_mask_3d.astype(float)) * blur_obj_mask
+        out_image = mask_fg * src_adjusted + (1.0 - mask_fg) * out_image
+
+        if shadow_extension:
+            blur_shadow = cv2.GaussianBlur(shadow_mask.astype(float), (15, 15), 0) * shadow_intensity
+            shadow_base = dst_image.astype(float) * 0.15
             if len(out_image.shape) == 3:
-                blur_mask = np.expand_dims(blur_mask, axis=-1)
-                paste_mask_3d = np.expand_dims(paste_mask, axis=-1)
-            else:
-                paste_mask_3d = paste_mask
-            mask_fg = paste_mask_3d.astype(float) + (
-                1 - paste_mask_3d.astype(float)
-            ) * blur_mask
-            out_image = (
-                mask_fg * src_adjusted + (1.0 - mask_fg) * out_image
-            ).astype(np.uint8)
-    else:
-        out_image[paste_mask == 1] = src_adjusted[paste_mask == 1]
+                blur_shadow = np.expand_dims(blur_shadow, axis=-1)
+                shadow_base = np.expand_dims(shadow_base, axis=-1)
+            out_image = blur_shadow * shadow_base + (1.0 - blur_shadow) * out_image
 
-    if speckle_uniform and paste_mask.sum() > 0:
-        paste_region = out_image[paste_mask == 1].astype(np.float32)
-        if len(paste_region) > 0:
-            noise = np.random.randn(*paste_region.shape).astype(np.float32)
-            paste_region = paste_region + paste_region * speckle_std * noise
-            out_image[paste_mask == 1] = np.clip(paste_region, 0, 255).astype(np.uint8)
+        out_image = np.clip(out_image, 0, 255).astype(np.uint8)
+    else:
+        out_image[obj_mask == 1] = src_adjusted[obj_mask == 1]
+        if shadow_extension:
+            shadow_base = (dst_image[shadow_mask == 1].astype(np.float32) * 0.15)
+            out_image[shadow_mask == 1] = np.clip(shadow_base, 0, 255).astype(np.uint8)
+
+    if speckle_uniform and obj_mask.sum() > 0:
+        ys, xs = np.where(obj_mask == 1)
+        y_min, y_max = max(0, ys.min() - 2), min(h, ys.max() + 3)
+        x_min, x_max = max(0, xs.min() - 2), min(w, xs.max() + 3)
+        roi = obj_mask[y_min:y_max, x_min:x_max]
+        roi_patch = out_image[y_min:y_max, x_min:x_max].astype(np.float32)
+
+        raw_noise = np.random.randn(*roi_patch.shape).astype(np.float32)
+        coherent_noise = cv2.GaussianBlur(raw_noise, (3, 3), 0)
+
+        roi_filter = (roi == 1)
+        if len(roi_patch.shape) == 3:
+            roi_filter = np.expand_dims(roi_filter, axis=-1)
+        roi_patch = roi_patch + roi_patch * speckle_std * coherent_noise * roi_filter
+        out_image[y_min:y_max, x_min:x_max] = np.clip(roi_patch, 0, 255).astype(np.uint8)
 
     return out_image, out_mask
 
@@ -213,11 +211,7 @@ def data_augment_pipeline(input_size=[512, 512],
                           mean=[0.485, 0.456, 0.406],
                           std=[0.229, 0.224, 0.225],
                           seed=42,
-                          version=2,
-                          rare_classes=None):
-
-    if version == 3:
-        assert rare_classes is not None, "rare_classes must be provided for version 3"
+                          version=2):
 
     train_pipeline = A.Compose([
         A.Resize(height=input_size[0], width=input_size[1]),
@@ -271,90 +265,12 @@ def data_augment_pipeline(input_size=[512, 512],
             A.Resize(height=input_size[0], width=input_size[1], p=1.0),
         ], p=1.0),
 
-        A.Affine(scale=(0.7, 1.2),
-                 translate_percent={"x": (-0.05, 0.05), "y": (-0.05, 0.05)},
-                 rotate=(-15, 15),
-                 p=0.4),
-        A.HorizontalFlip(p=0.5),
-
-        A.OneOf([
-            A.ElasticTransform(alpha=40, sigma=6, p=1.0),
-            A.GridDistortion(num_steps=5, distort_limit=(-0.3, 0.3), p=1.0),
-            A.OpticalDistortion(distort_limit=(-0.3, 0.3), p=1.0)
-        ], p=0.3),
-
-        # ==============================
-        # 第二阶段：物理成像退化
-        # ==============================
-        # 1. 探头底噪 (Noise)
-        A.OneOf([
-            A.GaussNoise(std_range=(10.0 / 255, 30.0 / 255), p=1.0),
-            A.Lambda(image=add_speckle_noise, p=1.0),
-        ], p=0.2),
-
-        # 2. 声束扩散模糊 (Blur - 模糊会晕染上面的噪声)
-        A.OneOf([
-            A.GaussianBlur(blur_limit=(3, 5), p=1.0),
-            A.MotionBlur(blur_limit=(3, 5), p=1.0),
-        ], p=0.2),
-
-        # 3. 机器基础增益 (Brightness/Contrast)
-        A.RandomBrightnessContrast(
-            brightness_limit=(-0.15, 0.15),
-            contrast_limit=(-0.15, 0.15),
-            p=0.3
+        A.Affine(
+            scale=(0.7, 1.2),
+            translate_percent={"x": (-0.05, 0.05), "y": (-0.05, 0.05)},
+            rotate=(-15, 15),
+            p=0.4
         ),
-
-        # 4. 探头物理分辨率极限 (Simulate Low Res)
-        # 🌟 必须在 Gamma 之前执行插值！
-        A.OneOf([
-            A.Downscale(scale_range=(0.5, 0.85), p=1.0),
-            A.Downscale(scale_range=(0.25, 0.5), p=1.0),
-        ], p=0.2),
-
-        # 5. 显示器非线性渲染 (Gamma)
-        A.OneOf([
-            # 正常 Gamma
-            A.RandomGamma(gamma_limit=(80, 150), p=1.0),
-            # ⭐ nnU-Net Invert Gamma（真正版本）
-            A.Compose([
-                A.InvertImg(p=1.0),
-                A.RandomGamma(gamma_limit=(80, 150), p=1.0),
-                A.InvertImg(p=1.0),
-            ])
-        ], p=0.2),
-
-        # ==============================
-        # 第三阶段：防遮挡与正则化
-        # ==============================
-        A.CoarseDropout(
-            num_holes_range=(1, 3),
-            hole_height_range=(1, max(2, input_size[0] // 12)),
-            hole_width_range=(1, max(2, input_size[1] // 12)),
-            fill=128,
-            p=0.1
-        ),
-        A.Normalize(mean=tuple(mean), std=tuple(std)),
-        A.ToTensorV2()
-    ], seed=seed)
-
-    train_pipeline3 = A.Compose([
-        # ==============================
-        # 第一阶段：空间几何形态 (Spatial)
-        # ==============================
-        A.OneOf([
-            LabelGuidedCropAlbumentations(height=input_size[1],
-                                          width=input_size[0],
-                                          p_rare=0.9,
-                                          rare_classes=rare_classes,
-                                          p=1.0),
-            A.Resize(height=input_size[0], width=input_size[1], p=1.0),
-        ], p=1.0),
-
-        A.Affine(scale=(0.7, 1.2),
-                 translate_percent={"x": (-0.05, 0.05), "y": (-0.05, 0.05)},
-                 rotate=(-15, 15),
-                 p=0.4),
         A.HorizontalFlip(p=0.5),
 
         A.OneOf([
@@ -426,7 +342,5 @@ def data_augment_pipeline(input_size=[512, 512],
 
     if version == 2:
         return train_pipeline2, val_pipeline
-    elif version == 3:
-        return train_pipeline3, val_pipeline
     else:
         return train_pipeline, val_pipeline

@@ -1,6 +1,7 @@
 from torch.utils.data import Dataset
 import cv2 as cv
 import numpy as np
+from typing import Union, List
 from pathlib import Path
 import sys
 import os
@@ -27,8 +28,8 @@ class Ultrasound_Dataset(Dataset):
                  data_root: str,
                  img_dir: str,
                  mask_dir: str,
-                 img_suffix: str = '.jpg',
-                 mask_suffix: str = '.png',
+                 img_suffix: Union[str, List[str]] = ['.jpg', '.png', '.bmp', '.tif', '.tiff'],
+                 mask_suffix: Union[str, List[str]] = ['.png'],
                  input_size: list = [512, 512],
                  mean: list = [0.485, 0.456, 0.406],
                  std: list = [0.229, 0.224, 0.225],
@@ -46,17 +47,28 @@ class Ultrasound_Dataset(Dataset):
         self.mask_dir = mask_dir
         assert mode in ['train', 'val', 'test'], f"mode should be one of ['train', 'val', 'test'], but got {mode}"
         self.mode = mode
-        self.img_paths = sorted((Path(data_root) / img_dir / mode).glob(f'*{img_suffix}'))
-        self.mask_paths = sorted((Path(data_root) / mask_dir / mode).glob(f'*{mask_suffix}'))
+
+        def _glob_with_suffixes(folder: Path, suffixes: Union[str, List[str]]) -> List[Path]:
+            """根据后缀（字符串或后缀列表）在 folder 中收集匹配的文件路径。"""
+            if isinstance(suffixes, str):
+                suffixes = [suffixes]
+            paths: set = set()
+            for suffix in suffixes:
+                if not suffix.startswith('.'):
+                    suffix = '.' + suffix
+                paths.update(folder.glob(f'*{suffix}'))
+            return sorted(paths)
+
+        img_folder = Path(data_root) / img_dir / mode
+        mask_folder = Path(data_root) / mask_dir / mode
+        self.img_paths = _glob_with_suffixes(img_folder, img_suffix)
+        self.mask_paths = _glob_with_suffixes(mask_folder, mask_suffix)
         self.mean = list(mean)
         self.std = list(std)
         assert len(self.img_paths) == len(self.mask_paths), "Number of images and masks should be the same !"
 
-        train_pipeline, val_pipeline = data_augment_pipeline(input_size=input_size,
-                                                             mean=mean,
-                                                             std=std,
-                                                             version=augment_version)
-        self.augment_pipeline = train_pipeline if mode == 'train' else val_pipeline
+        if self.mode != 'train':
+            self.hard_samp = False
 
         if num_classes is not None:
             self.num_classes = num_classes
@@ -69,15 +81,18 @@ class Ultrasound_Dataset(Dataset):
 
         self.use_roi = use_roi
         self.rare_classes = rare_classes if rare_classes is not None else None
-        self.hard_samp = hard_samp
+        self.hard_samp = hard_samp if self.mode == 'train' else False
 
         self.compute_class_pixel_frequency()
         self.compute_class_rarity_weights(ignore_index=-1)
+        self.compute_sample_weights(ignore_index=-1)
 
-        if self.hard_samp and self.mode == 'train':
-            self.compute_sample_weights(ignore_index=-1)
-        elif self.mode != 'train':
-            self.hard_samp = False
+        train_pipeline, val_pipeline = data_augment_pipeline(input_size=input_size,
+                                                             mean=mean,
+                                                             std=std,
+                                                             version=augment_version,
+                                                             rare_classes=self.rare_classes)
+        self.augment_pipeline = train_pipeline if mode == 'train' else val_pipeline
 
     def __len__(self):
         return len(self.img_paths)
@@ -159,6 +174,7 @@ class Ultrasound_Dataset(Dataset):
         else:
             rare_classes = set(self.rare_classes)
 
+        self.rare_classes = rare_classes
         sample_weights = []
 
         for mask_path in self.mask_paths:

@@ -1,0 +1,72 @@
+# 驼人掌超踝关节超声数据集 包含耦合剂的空背景图像
+data_root: /home/t_wanghan/work/data/HuaiWithBG
+img_dir: images
+mask_dir: masks
+
+img_suffix: .png
+mask_suffix: .png
+
+# class_rgb_dir: SegmentationClass
+# object_dir: SegmentationObject
+
+num_classes: 20
+num_training_samples: 1471
+num_validation_samples: 632
+image_height: 920
+image_width: 1270
+
+mean:
+  train_data: [0.081, 0.087, 0.092]
+  imagenet: [0.485, 0.456, 0.406]
+
+std:
+  train_data: [0.132, 0.142, 0.151]
+  imagenet: [0.229, 0.224, 0.225]
+
+normalize_type: imagenet
+
+classes: [
+  0—背景,
+  1-前脂肪垫,
+  2-胫前肌,
+  3-胫腓前韧带,
+  4-胫距关节间隙,
+  5-胫骨,
+  6-胫骨下端,
+  7-腓骨,
+  8-足底筋膜,
+  9-足跟垫,
+  10-趾长伸肌,
+  11-距腓前韧带,
+  12-距骨,
+  13-距骨头,
+  14-距骨顶,
+  15-距骨颈,
+  16-跟后脂肪垫,
+  17-跟腱,
+  18-跟骨,
+  19-𧿹长伸肌
+]
+
+color_map: [
+  [0,0,0],
+  [248,174,99],
+  [125,108,212],
+  [153,112,28],
+  [94,193,243],
+  [255,218,105],
+  [116,240,219],
+  [107,176,245],
+  [182,144,32],
+  [190,130,69],
+  [83,208,233],
+  [235,195,116],
+  [226,88,61],
+  [104,245,150],
+  [15,98,182],
+  [207,163,29],
+  [246,175,103],
+  [165,236,250],
+  [97,177,80],
+  [21,137,160]
+]

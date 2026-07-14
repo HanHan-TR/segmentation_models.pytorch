@@ -63,7 +63,7 @@ def train(config):
     # save configs
     yaml_save(cfg_dir / 'model.yaml', model_cfg)
     yaml_save(cfg_dir / 'dataset.yaml', dataset_cfg)
-    yaml_save(cfg_dir / 'hyper.yaml', config)
+    yaml_save(cfg_dir / 'hyper.yaml', config.hyper_cfg) if config.hyper_cfg is not None else yaml_save(cfg_dir / 'hyper.yaml', config)
 
     # 设置随机种子, 保证算法的可复现性
     device = torch.device(f"cuda:{config.device}" if torch.cuda.is_available() else "cpu")
@@ -356,9 +356,9 @@ def parse_args():
     parser.add_argument('--att_type', type=str, default=None, help='decoder attention type for training, none or scse')
     parser.add_argument('--use_roi', action='store_true', help='use roi for training')
     parser.add_argument('--hard_samp', action='store_true', help='use hard sampling for training')
-    parser.add_argument('--augment_version', type=int, default=2, help='augment version for training')
+    parser.add_argument('--augment_version', type=int, default=3, help='augment version for training')
 
-    parser.add_argument('--sweep_cfg', type=str, default='UltraSeg/config/hyper/unet-mobilenet-ema-sweep.yaml', help='hyperparameters config file')
+    parser.add_argument('--sweep_cfg', type=str, default='UltraSeg/config/hyper/huai_efficientnet_sweep.yaml', help='hyperparameters config file')
     parser.add_argument('--work-dir',
                         default=ROOT / 'res', help='the dir to save logs and models')
     parser.add_argument('--project',

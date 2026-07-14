@@ -14,37 +14,25 @@ if str(ROOT) not in sys.path:
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 RANK = int(os.getenv('RANK', -1))
 
-from segmentation_models_pytorch import create_model
-from UltraSeg.core.fileio import yaml_load, yaml_save, increment_path, dict_to_obj
-from UltraSeg.core.initialize import init_random_seed, set_random_seed
-from UltraSeg.core.dataset import create_dataset
-from UltraSeg.tools.val import validate_one_epoch, ModelSaver
-from UltraSeg.tools.evaluate import compute_class_weights_from_loader
-from UltraSeg.tools.train_utils import train_one_epoch
-from UltraSeg.core.losses import Loss
-from UltraSeg.core.optimizer import get_optimizer
-from UltraSeg.core.lr_scheduler import get_lr_scheduler
-from UltraSeg.tools.evaluate import evaluate_model
-# from UltraSeg.logger.logger import get_environment_info, log_write
-from UltraSeg.core.ema import EMA
+from UltraSeg.core.fileio import yaml_load, increment_path, dict_to_obj, object_to_dict
 from UltraSeg.sweep_train import train
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a segmentation model')
-    parser.add_argument('--model_cfg', type=str, default='UltraSeg/config/network/unet-mobilenetv2.yaml', help='model config file')
-    parser.add_argument('--dataset_cfg', type=str, default='UltraSeg/config/dataset/wrist.yaml', help='dataset config file')
-    parser.add_argument('--hyper_cfg', type=str, default='res/unet-mobilenetv2/exp10/cfg/hyper.yaml', help='hyperparameters config file')
-    parser.add_argument('--input_size', type=int, default=512, help='input size for training and validation')
-    parser.add_argument('--att_type', type=str, default=None, help='decoder attention type for training, none or scse')
-    parser.add_argument('--use_roi', action='store_true', help='use roi for training')
-    parser.add_argument('--use_dual', action='store_true', help='use cutmix for training')
+    parser.add_argument('--model_cfg', type=str, default=None, help='model config file')
+    parser.add_argument('--dataset_cfg', type=str,
+                        default='UltraSeg/config/dataset/huaiBG.yaml',
+                        help='dataset config file')
+    parser.add_argument('--hyper_cfg', type=str,
+                        default='res/huai-seg/best/timm-tf_efficientnet_lite1-no-att-no-roi-hard-samp-512-p17/cfg/hyper.yaml',
+                        help='hyperparameters config file')
     parser.add_argument('--work-dir',
                         default=ROOT / 'res', help='the dir to save logs and models')
     parser.add_argument('--project',
-                        default='test', help='the project name to save logs')
-    parser.add_argument('--name', default='exp', help='save to work-dir/project/name')
-    parser.add_argument('--device', default='3', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+                        default='huai-seg', help='the project name to save logs')
+    parser.add_argument('--name', default='timm-tf_efficientnet_lite1-p17-tuneWithBG', help='save to work-dir/project/name')
+    parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--load_from_ckpt', type=str, default=None, help='load from checkpoint')
 
     args = parser.parse_args()
@@ -62,13 +50,26 @@ def main():
     config = dict_to_obj(yaml_load(opts.hyper_cfg))
 
     config.exp_dir = exp_dir
-    config.model_cfg = opts.model_cfg
-    config.dataset_cfg = opts.dataset_cfg
     config.device = opts.device
-    config.decoder_attention_type = opts.att_type
-    config.use_roi = opts.use_roi
-    config.use_cutmix = opts.use_dual
+    if opts.dataset_cfg is not None:
+        config.dataset_cfg = opts.dataset_cfg
+
+    if opts.model_cfg is not None:
+        config.model_cfg = opts.model_cfg
+
     config.load_from_ckpt = opts.load_from_ckpt if opts.load_from_ckpt is not None else None
+
+    hyper_cfg = object_to_dict(config)
+    config.hyper_cfg = hyper_cfg
+
+    wandb.init(
+        # Set the wandb entity where your project will be logged (generally your team name).
+        entity="wanghan-tr-tuorenmedical",
+        # Set the wandb project where this run will be logged.
+        project=opts.project,
+        name=exp_dir.name,
+        dir=exp_dir,
+    )
     train(config)
 
 

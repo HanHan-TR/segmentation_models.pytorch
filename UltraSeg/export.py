@@ -262,21 +262,21 @@ def main():
 
     # 基础参数
     parser.add_argument('--checkpoint', type=str,
-                        default='res/wrist-seg/timm-tf_efficientnet_lite1-no-att-no-roi-hard-samp-512-p22/weights/ema_best.pth',
+                        default='res/huai-seg/best/timm-tf_efficientnet_lite1-p17-tuneWithBG/weights/ema_best.pth',
                         help='PyTorch模型权重文件路径（.pth）')
     parser.add_argument('--dataset_cfg', type=str,
-                        default='UltraSeg/config/dataset/wrist.yaml',
+                        default='UltraSeg/config/dataset/huaiBG.yaml',
                         help='数据集配置文件路径')
     # ONNX转换参数
     parser.add_argument('--opset_version', type=int, default=13,
                         help='ONNX opset版本')
 
     # OpenVINO转换参数
-    parser.add_argument('--fp16', action='store_true', default=False,
+    parser.add_argument('--fp16', action='store_true',
                         help='是否将OpenVINO模型压缩为FP16格式')
 
     # 量化参数
-    parser.add_argument('--quantize', action='store_true', default=False,
+    parser.add_argument('--quantize', action='store_true',
                         help='是否对模型进行量化')
     parser.add_argument('--quantization_type', type=str, default='accuracy_aware',
                         choices=['int8', 'accuracy_aware'],
