@@ -30,6 +30,9 @@ def visualize_predictions(images: torch.Tensor,
     """
     assert color_map is not None, "color_map must be provided"
 
+    # OpenCV 使用 BGR 通道顺序，color_map 是 RGB 顺序，需要转换
+    color_map_bgr = [[c[2], c[1], c[0]] for c in color_map]
+
     num_images = min(images.shape[0], max_images)
     num_rows = (num_images + 1) // 2
 
@@ -77,12 +80,14 @@ def visualize_predictions(images: torch.Tensor,
         img = np.clip(img, 0, 1)
         img = (img * 255).astype(np.uint8)
         img = np.transpose(img, (1, 2, 0))
+        # 原始图像是 RGB 顺序，OpenCV 需要 BGR，进行通道转换
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
         img_resized = cv2.resize(img, (cell_width, cell_height))
 
         # 处理标签
         target_colored = np.zeros((target.shape[0], target.shape[1], 3), dtype=np.uint8)
-        for class_id, color in enumerate(color_map):
+        for class_id, color in enumerate(color_map_bgr):
             mask = target == class_id
             target_colored[mask] = color
         target_resized = cv2.resize(target_colored, (cell_width, cell_height))
@@ -90,7 +95,7 @@ def visualize_predictions(images: torch.Tensor,
 
         # 处理预测
         pred_colored = np.zeros((pred_i.shape[0], pred_i.shape[1], 3), dtype=np.uint8)
-        for class_id, color in enumerate(color_map):
+        for class_id, color in enumerate(color_map_bgr):
             mask = pred_i == class_id
             pred_colored[mask] = color
         pred_resized = cv2.resize(pred_colored, (cell_width, cell_height))
