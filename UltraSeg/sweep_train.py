@@ -90,24 +90,31 @@ def train(config):
         sampler = WeightedRandomSampler(weights=torch.DoubleTensor(train_dataset.sample_weights),
                                         num_samples=len(train_dataset.sample_weights) * 2,  # 进行过采样，迭代器的长度是原来的两倍
                                         replacement=True)
-
+        # persistent_workers=True - 工作进程在epoch之间不销毁，避免重复的进程启动/销毁开销（这是你等待的主要原因）
+        # prefetch_factor=4 - 每个工作进程预取4个batch，而不是1个，改善数据吞吐量
         train_loader = DataLoader(train_dataset,
                                   batch_size=config.batch_size,
                                   sampler=sampler,
-                                  num_workers=8,
-                                  pin_memory=True)
+                                  num_workers=config.num_workers,
+                                  pin_memory=True,
+                                  persistent_workers=True,
+                                  prefetch_factor=4)
     else:
         train_loader = DataLoader(train_dataset,
                                   batch_size=config.batch_size,
                                   shuffle=True,
-                                  num_workers=8,
-                                  pin_memory=True)
+                                  num_workers=config.num_workers,
+                                  pin_memory=True,
+                                  persistent_workers=True,
+                                  prefetch_factor=4)
 
     val_loader = torch.utils.data.DataLoader(val_dataset,
                                              batch_size=config.batch_size,
                                              shuffle=False,
-                                             num_workers=8,
-                                             pin_memory=True)
+                                             num_workers=config.num_workers,
+                                             pin_memory=True,
+                                             persistent_workers=True,
+                                             prefetch_factor=4)
 
     # Create model saver
     model_saver = ModelSaver(best_model_pth=best_model_pth,
@@ -356,6 +363,7 @@ def parse_args():
     parser.add_argument('--encoder_init_weights', type=str, default='imagenet', help='initialize encoder weights')
     parser.add_argument('--dataset_cfg', type=str, default='UltraSeg/config/dataset/wan_guanBG.yaml', help='dataset config file')
     parser.add_argument('--input_size', type=int, default=512, help='input size for training and validation')
+    parser.add_argument('--num_workers', type=int, default=8, help='number of workers for data loading')
     parser.add_argument('--att_type', type=str, default=None, help='decoder attention type for training, none or scse')
     parser.add_argument('--use_roi', action='store_true', help='use roi for training')
     parser.add_argument('--hard_samp', action='store_true', help='use hard sampling for training')
@@ -415,6 +423,7 @@ def sweep_main():
         run.config.rare_classes = opts.rare_classes
         run.config.load_from_ckpt = opts.load_from_ckpt if opts.load_from_ckpt is not None else None
         run.config.augment_version = opts.augment_version
+        run.config.num_workers = opts.num_workers
         train(run.config)
 
 
