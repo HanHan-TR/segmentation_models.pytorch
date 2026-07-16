@@ -1,6 +1,9 @@
 import cv2
 import random
 import numpy as np
+import os
+os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
+
 import albumentations as A
 from albumentations.core.transforms_interface import DualTransform
 

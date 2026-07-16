@@ -2,6 +2,8 @@ import argparse
 import wandb
 from pathlib import Path
 import os
+os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
+
 import sys
 import torch
 from prettytable import PrettyTable
@@ -14,7 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 RANK = int(os.getenv('RANK', -1))
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from segmentation_models_pytorch import create_model
 from UltraSeg.core.fileio import yaml_load, yaml_save, increment_path
 from UltraSeg.core.initialize import init_random_seed, set_random_seed
@@ -76,6 +78,7 @@ def train(config):
                                    split='train',
                                    use_roi=config.use_roi,
                                    hard_samp=config.hard_samp,
+                                   rare_classes=config.rare_classes,
                                    augment_version=config.augment_version)
     val_dataset = create_dataset(dataset_cfg,
                                  input_size=config.input_size,
@@ -357,12 +360,15 @@ def parse_args():
     parser.add_argument('--use_roi', action='store_true', help='use roi for training')
     parser.add_argument('--hard_samp', action='store_true', help='use hard sampling for training')
     parser.add_argument('--augment_version', type=int, default=2, help='augment version for training')
+    parser.add_argument('--rare_classes', type=int, nargs='+', 
+                        default=None,  # 腕管：[1, 3, 6, 8, 11]
+                        help='rare classes for training, e.g. --rare_classes 0 1 2')
     parser.add_argument('--sweep_cfg', type=str, default='UltraSeg/config/hyper/ema-sweep.yaml', help='hyperparameters config file')
     parser.add_argument('--work-dir',
                         default=ROOT / 'res', help='the dir to save logs and models')
     parser.add_argument('--project',
                         default='wan_guan-seg', help='the project name to save logs')
-    parser.add_argument('--name', default='p', help='save to work-dir/project/name, and wandb run name')
+    parser.add_argument('--name', default='exp', help='save to work-dir/project/name, and wandb run name')
     parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--load_from_ckpt', type=str, default=None, help='load from checkpoint')
     parser.add_argument('--sweep_count', type=int, default=60, help='sweep count for wandb agent')
@@ -406,6 +412,7 @@ def sweep_main():
         run.config.decoder_attention_type = opts.att_type
         run.config.use_roi = opts.use_roi
         run.config.hard_samp = opts.hard_samp
+        run.config.rare_classes = opts.rare_classes
         run.config.load_from_ckpt = opts.load_from_ckpt if opts.load_from_ckpt is not None else None
         run.config.augment_version = opts.augment_version
         train(run.config)

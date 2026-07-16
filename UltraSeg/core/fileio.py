@@ -39,14 +39,14 @@ def check_yaml(file, suffix=('.yaml', '.yml')):
 def yaml_load(file='data.yaml'):
     file = check_yaml(file)
     # Single-line safe yaml loading
-    with open(file, errors='ignore') as f:
+    with open(file, errors='ignore', encoding='utf-8') as f:
         return yaml.safe_load(f)
 
 
 def yaml_save(file='data.yaml', data={}):
     file = str(file)  # convert to str()
     # Single-line safe yaml saving
-    with open(file, 'w') as f:
+    with open(file, 'w', encoding='utf-8') as f:
         yaml.safe_dump({k: str(v) if isinstance(v, Path) else v for k, v in data.items()}, f, sort_keys=False)
 
 
