@@ -2,13 +2,17 @@ import argparse
 import wandb
 from pathlib import Path
 import os
+import platform
 os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
 
 import sys
 import torch
+import gc
 from prettytable import PrettyTable
 import wcwidth
 import shutil
+
+IS_WINDOWS = platform.system() == 'Windows'
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]  # root directory
@@ -90,31 +94,32 @@ def train(config):
         sampler = WeightedRandomSampler(weights=torch.DoubleTensor(train_dataset.sample_weights),
                                         num_samples=len(train_dataset.sample_weights) * 2,  # 进行过采样，迭代器的长度是原来的两倍
                                         replacement=True)
-        # persistent_workers=True - 工作进程在epoch之间不销毁，避免重复的进程启动/销毁开销（这是你等待的主要原因）
-        # prefetch_factor=4 - 每个工作进程预取4个batch，而不是1个，改善数据吞吐量
+        # Windows: persistent_workers=True 避免每个epoch重复创建进程（spawn开销大）
+        # Linux: persistent_workers=False 及时释放文件描述符，避免 "Too many open files"
+        # prefetch_factor: Windows=4，Linux=2，平衡吞吐量和资源占用
         train_loader = DataLoader(train_dataset,
                                   batch_size=config.batch_size,
                                   sampler=sampler,
                                   num_workers=config.num_workers,
                                   pin_memory=True,
-                                  persistent_workers=True,
-                                  prefetch_factor=4)
+                                  persistent_workers=IS_WINDOWS,
+                                  prefetch_factor=4 if IS_WINDOWS else None)
     else:
         train_loader = DataLoader(train_dataset,
                                   batch_size=config.batch_size,
                                   shuffle=True,
                                   num_workers=config.num_workers,
                                   pin_memory=True,
-                                  persistent_workers=True,
-                                  prefetch_factor=4)
+                                  persistent_workers=IS_WINDOWS,
+                                  prefetch_factor=4 if IS_WINDOWS else None)
 
     val_loader = torch.utils.data.DataLoader(val_dataset,
                                              batch_size=config.batch_size,
                                              shuffle=False,
                                              num_workers=config.num_workers,
                                              pin_memory=True,
-                                             persistent_workers=True,
-                                             prefetch_factor=4)
+                                             persistent_workers=IS_WINDOWS,
+                                             prefetch_factor=4 if IS_WINDOWS else None)
 
     # Create model saver
     model_saver = ModelSaver(best_model_pth=best_model_pth,
@@ -354,6 +359,17 @@ def train(config):
                        model_type=model_type,
                        use_roi=config.use_roi)
 
+    # ============ 实验结束：显式释放资源，避免 "Too many open files" ============
+    # 删除 DataLoader 引用，强制工作进程退出并释放文件描述符
+    del train_loader, val_loader
+    # 删除模型引用
+    del model
+    # 强制垃圾回收，及时释放所有资源
+    gc.collect()
+    # 清空 CUDA 缓存（如果使用 GPU）
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a segmentation model')
@@ -368,7 +384,7 @@ def parse_args():
     parser.add_argument('--use_roi', action='store_true', help='use roi for training')
     parser.add_argument('--hard_samp', action='store_true', help='use hard sampling for training')
     parser.add_argument('--augment_version', type=int, default=2, help='augment version for training')
-    parser.add_argument('--rare_classes', type=int, nargs='+', 
+    parser.add_argument('--rare_classes', type=int, nargs='+',
                         default=None,  # 腕管：[1, 3, 6, 8, 11]
                         help='rare classes for training, e.g. --rare_classes 0 1 2')
     parser.add_argument('--sweep_cfg', type=str, default='UltraSeg/config/hyper/ema-sweep.yaml', help='hyperparameters config file')
