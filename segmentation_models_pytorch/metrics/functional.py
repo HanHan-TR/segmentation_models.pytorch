@@ -339,10 +339,14 @@ def _compute_metric(
 
 
 def _fbeta_score(tp, fp, fn, tn, beta=1):
-    beta_tp = (1 + beta**2) * tp
-    beta_fn = (beta**2) * fn
-    score = beta_tp / (beta_tp + beta_fn + fp)
+    beta_tp = (1 + beta**2) * tp  # 2TP
+    beta_fn = (beta**2) * fn  # 2FN
+    score = beta_tp / (beta_tp + beta_fn + fp)  # F1score = Dice = 2TP / (2TP + 2FN + FP)  错误
     return score
+
+
+def _dice_score(tp, fp, fn, tn):
+    return 2 * tp / (2 * tp + fn + fp)
 
 
 def _iou_score(tp, fp, fn, tn):
@@ -438,6 +442,28 @@ def f1_score(
         fn,
         tn,
         beta=1.0,
+        reduction=reduction,
+        class_weights=class_weights,
+        zero_division=zero_division,
+    )
+
+
+def dice_score(
+    tp: torch.LongTensor,
+    fp: torch.LongTensor,
+    fn: torch.LongTensor,
+    tn: torch.LongTensor,
+    reduction: Optional[str] = None,
+    class_weights: Optional[List[float]] = None,
+    zero_division: Union[str, float] = 1.0,
+) -> torch.Tensor:
+    """Dice score"""
+    return _compute_metric(
+        _dice_score,
+        tp,
+        fp,
+        fn,
+        tn,
         reduction=reduction,
         class_weights=class_weights,
         zero_division=zero_division,

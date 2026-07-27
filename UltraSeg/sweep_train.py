@@ -392,7 +392,7 @@ def parse_args():
                         default=ROOT / 'res', help='the dir to save logs and models')
     parser.add_argument('--project',
                         default='wan_guan-seg', help='the project name to save logs')
-    parser.add_argument('--name', default='exp', help='save to work-dir/project/name, and wandb run name')
+    parser.add_argument('--name', default='r', help='save to work-dir/project/name, and wandb run name')
     parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--load_from_ckpt', type=str, default=None, help='load from checkpoint')
     parser.add_argument('--sweep_count', type=int, default=60, help='sweep count for wandb agent')

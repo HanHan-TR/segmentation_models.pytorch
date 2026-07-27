@@ -25,7 +25,7 @@ def parse_args():
                         default='UltraSeg/config/dataset/wan_guanBG.yaml',
                         help='dataset config file')
     parser.add_argument('--hyper_cfg', type=str,
-                        default='res/wrist-seg/best/timm-tf_efficientnet_lite1-no-att-no-roi-hard-samp-512-p22/cfg/hyper.yaml',
+                        default='res/wan_guan-seg/best/timm-tf_efficientnet_lite1-no-att-no-roi-hard-samp-512-exp17/cfg/hyper.yaml',
                         help='hyperparameters config file')
     parser.add_argument('--work-dir',
                         default=ROOT / 'res', help='the dir to save logs and models')

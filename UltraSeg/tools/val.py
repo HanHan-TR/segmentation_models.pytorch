@@ -102,12 +102,12 @@ def calculate_metrics_all_classes(tp_all, fp_all, fn_all, tn_all, class_weights=
                                                tn=tn_all,
                                                class_weights=class_weights,
                                                reduction=reduction).item()
-        metrics["dice"] = smp.metrics.f1_score(tp=tp_all,
-                                               fp=fp_all,
-                                               fn=fn_all,
-                                               tn=tn_all,
-                                               class_weights=class_weights,
-                                               reduction=reduction).item()
+        metrics["dice"] = smp.metrics.dice_score(tp=tp_all,
+                                                 fp=fp_all,
+                                                 fn=fn_all,
+                                                 tn=tn_all,
+                                                 class_weights=class_weights,
+                                                 reduction=reduction).item()
         metrics["f2score"] = smp.metrics.fbeta_score(tp=tp_all,
                                                      fp=fp_all,
                                                      fn=fn_all,
@@ -168,12 +168,12 @@ class ModelSaver:
 
         self.class_weights = None  # 需要在训练过程中计算得到，并传入 save() 函数
         # 默认权重
-        self.metric_weights = metric_weights or {"loss": 0.10,
+        self.metric_weights = metric_weights or {"loss": 0.20,
                                                  "accuracy": 0.0,
-                                                 "precision": 0.1,
-                                                 "recall": 0.15,
-                                                 "iou": 0.30,
-                                                 "dice": 0.35,
+                                                 "precision": 0.0,
+                                                 "recall": 0.0,
+                                                 "iou": 0.4,
+                                                 "dice": 0.4,
                                                  "f2": 0.0,
                                                  }
 
