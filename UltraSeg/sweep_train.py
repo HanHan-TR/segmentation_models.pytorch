@@ -26,7 +26,6 @@ from UltraSeg.core.fileio import yaml_load, yaml_save, increment_path
 from UltraSeg.core.initialize import init_random_seed, set_random_seed
 from UltraSeg.core.dataset import create_dataset
 from UltraSeg.tools.val import validate_one_epoch, ModelSaver
-from UltraSeg.tools.evaluate import compute_class_weights_from_loader
 from UltraSeg.tools.train_utils import train_one_epoch
 from UltraSeg.core.losses import Loss
 from UltraSeg.core.optimizer import get_optimizer

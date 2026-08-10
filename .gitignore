@@ -116,3 +116,10 @@ venv.bak/
 res/
 UltraSeg/images/
 wandb/
+
+# 图片
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.gif

@@ -262,10 +262,10 @@ def main():
 
     # 基础参数
     parser.add_argument('--checkpoint', type=str,
-                        default='res/huai-seg/best/timm-tf_efficientnet_lite1-p17-tuneWithBG/weights/ema_best.pth',
+                        default='res/wan_guan-seg/best/timm-tf_efficientnet_lite1-no-att-no-roi-hard-samp-512-exp41/weights/ema_best.pth',
                         help='PyTorch模型权重文件路径（.pth）')
     parser.add_argument('--dataset_cfg', type=str,
-                        default='UltraSeg/config/dataset/huaiBG.yaml',
+                        default='UltraSeg/config/dataset/wan_guanBG.yaml',
                         help='数据集配置文件路径')
     # ONNX转换参数
     parser.add_argument('--opset_version', type=int, default=13,

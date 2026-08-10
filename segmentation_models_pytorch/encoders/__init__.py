@@ -114,9 +114,9 @@ def get_encoder(name, in_channels=3, depth=5, weights=None, output_stride=32, **
                 f"Available options are: {available_weights}"
             )
 
-        settings = encoders[name]["pretrained_settings"][weights]
-        repo_id = settings["repo_id"]
-        revision = settings["revision"]
+        # settings = encoders[name]["pretrained_settings"][weights]
+        # repo_id = settings["repo_id"]
+        # revision = settings["revision"]
 
         # First, try to load from  HF-Hub, but as far as I know not all countries have
         # access to the Hub (e.g. China), so we try to load from the original url if
