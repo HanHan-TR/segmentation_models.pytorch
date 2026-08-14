@@ -5,7 +5,7 @@ import torch
 from pathlib import Path
 import os
 import sys
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]  # root directory
@@ -103,9 +103,46 @@ def inference(model, img_tensor, device):
     return pred.cpu().numpy()[0]
 
 
-def visualize_result(original_img, pred_mask, gt_mask, color_map, alpha=0.6):
+CHINESE_FONT_PATH = os.path.expanduser("~/.local/share/fonts/wqy-microhei/wqy-microhei.ttc")
+
+
+def _draw_class_labels(overlay, mask, class_names, color_map, orig_h, orig_w):
     """
-    将预测结果和真实标签绘制到原图像上，并水平拼接
+    在每个类别区域的形心处绘制类别名称（支持中文）
+    """
+    mask_h, mask_w = mask.shape[:2]
+    scale_x = orig_w / mask_w
+    scale_y = orig_h / mask_h
+
+    overlay_pil = Image.fromarray(overlay)
+    draw = ImageDraw.Draw(overlay_pil)
+
+    try:
+        font = ImageFont.truetype(CHINESE_FONT_PATH, 24)
+    except (IOError, OSError):
+        font = ImageFont.load_default()
+
+    for class_id in range(len(color_map)):
+        if class_id == 0:
+            continue
+        if class_names is None or class_id >= len(class_names):
+            continue
+        class_mask = (mask == class_id)
+        if not np.any(class_mask):
+            continue
+        ys, xs = np.where(class_mask)
+        cy = int(np.mean(ys) * scale_y)
+        cx = int(np.mean(xs) * scale_x)
+
+        class_name = class_names[class_id]
+        draw.text((cx, cy), class_name, font=font, fill=(255, 255, 255), anchor="mm")
+
+    overlay[:] = np.array(overlay_pil)
+
+
+def visualize_result(original_img, pred_mask, gt_mask, color_map, class_names=None, alpha=0.6):
+    """
+    将预测结果和真实标签绘制到原图像上，并水平拼接，并在每个类别区域形心标注类别名称
     """
     h, w = original_img.shape[:2]
 
@@ -119,6 +156,8 @@ def visualize_result(original_img, pred_mask, gt_mask, color_map, alpha=0.6):
 
     # 添加标签文字
     cv2.putText(pred_overlay, 'Pred', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    # 在预测mask上添加类别名称
+    _draw_class_labels(pred_overlay, pred_mask, class_names, color_map, h, w)
 
     # 处理真实标签mask（如果提供）
     if gt_mask is not None:
@@ -129,6 +168,8 @@ def visualize_result(original_img, pred_mask, gt_mask, color_map, alpha=0.6):
         gt_resized = cv2.resize(gt_colored, (w, h))
         gt_overlay = cv2.addWeighted(original_img, (1 - alpha), gt_resized, alpha, 0)
         cv2.putText(gt_overlay, 'GT', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        # 在GT mask上添加类别名称
+        _draw_class_labels(gt_overlay, gt_mask, class_names, color_map, h, w)
     else:
         # 如果没有gt_mask，显示原图
         gt_overlay = original_img.copy()
@@ -142,14 +183,17 @@ def visualize_result(original_img, pred_mask, gt_mask, color_map, alpha=0.6):
 def main():
     parser = argparse.ArgumentParser(description='语义分割模型推理')
     parser.add_argument('--input', type=str,
-                        default='/home/t_wanghan/work/segmentation_models.pytorch/UltraSeg/images/img',
+                        default='/home/t_wanghan/work/data/wan_shortlong/JPEGImages/all',
                         help='输入图像路径或包含图像的文件夹路径')
-    parser.add_argument('--output', default='./inference_results', help='输出文件夹路径')
+    parser.add_argument('--gt', type=str,
+                        default='/home/t_wanghan/work/data/wan_shortlong/Masks/all',
+                        help='真实标签图像路径或包含标签的文件夹路径')
+    parser.add_argument('--output', default='inference_results', help='输出文件夹路径')
     parser.add_argument('--checkpoint', type=str,
-                        default='/home/t_wanghan/work/segmentation_models.pytorch/res/wrist-ultraseg/no-att-no-roi-hard-samp-384-p10/weights/ema_best.pth',
+                        default='res/wrist-seg/best/timm-tf_efficientnet_lite1-p22-tuneWithBG/weights/ema_best.pth',
                         help='训练好的模型checkpoint路径')
-    parser.add_argument('--model_cfg', default='UltraSeg/config/network/unet-mobilenetv2.yaml', help='模型配置文件路径')
-    parser.add_argument('--dataset_cfg', default='UltraSeg/config/dataset/wrist.yaml', help='数据集配置文件路径')
+    parser.add_argument('--dataset_cfg', default='UltraSeg/config/dataset/wan/wan_shortlong.yaml', help='数据集配置文件路径')
+    parser.add_argument('--split', type=str, default='all', help='数据集划分，选择all/train/val/test')
     parser.add_argument('--input_size', type=int, default=384, help='模型输入尺寸')
     parser.add_argument('--device', default='0', help='cuda设备，如 0 或 cpu')
 
@@ -161,14 +205,11 @@ def main():
     # 加载模型
     model, input_size, mean, std = load_model(args.checkpoint)
     dataset_cfg = yaml_load(args.dataset_cfg)
+    dataset_name = Path(args.dataset_cfg).stem
+    class_names = dataset_cfg.get('classes', None)
     color_map = dataset_cfg.get('color_map', None)
-    if color_map is None:
-        color_map = [[0, 0, 0], [32, 32, 185], [102, 245, 102], [214, 41, 69],
-                     [218, 70, 218], [177, 70, 92], [156, 63, 156], [165, 32, 59],
-                     [204, 204, 59], [194, 87, 140]]
-
-    # 创建输出文件夹
-    os.makedirs(args.output, exist_ok=True)
+    assert color_map is not None, "color_map must be provided in dataset_cfg"
+    color_map = np.array(color_map, dtype=np.uint8)
 
     # 收集输入图像列表
     input_path = Path(args.input)
@@ -184,7 +225,14 @@ def main():
         raise ValueError(f"输入路径不存在: {args.input}")
 
     # 获取mask路径（如果存在）
-    mask_dir = input_path.parent / 'mask' if input_path.is_file() else input_path.parent / 'mask'
+    mask_dir = Path(args.gt)
+
+    # 创建输出文件夹
+    model_name = Path(args.checkpoint).stem
+    model_type = Path(args.checkpoint).suffix.replace('.', '_')
+    out_folder_name = f"{args.output}_{model_name}{model_type}_{dataset_name}"
+    output_dir = Path(args.checkpoint).parents[1] / out_folder_name
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # 处理每张图像
     for img_path in image_paths:
@@ -205,11 +253,11 @@ def main():
             gt_mask = None
 
         # 可视化结果
-        result = visualize_result(original_img, pred_mask, gt_mask, color_map)
+        result = visualize_result(original_img, pred_mask, gt_mask, color_map, class_names)
 
         # 保存结果
         output_name = img_path.stem + '_pred_gt.jpg'
-        output_path = Path(args.output) / output_name
+        output_path = output_dir / output_name
         cv2.imwrite(str(output_path), cv2.cvtColor(result, cv2.COLOR_RGB2BGR))
         print(f"Result saved to {output_path}")
 

@@ -1,5 +1,13 @@
 # 超声腕部数据集划分
 
+# 说明：
+# 该脚本有两个主要功能：
+# 1. 将彩色标签图像转换为单通道标签图像
+# 2. 划分数据集为训练集、验证集和测试集
+# 使用方法：
+# 1. 准备数据集配置信息yaml文件，包含数据集的路径、类别信息、颜色映射表等
+# 2. 准备数据集；
+
 import random
 import shutil
 import sys
@@ -111,10 +119,15 @@ def convert_rgb_labels_to_single_channel(
 if __name__ == '__main__':
     device = torch.device("cpu")
     train_percent = 0.7
+    val_percent = 0.2
+    test_percent = 0.1
+
+    sum = train_percent + val_percent + test_percent
+
     seed = init_random_seed(seed=42, device=device)
     set_random_seed(seed=seed, deterministic=True)
 
-    yaml_dir = str(ROOT / 'UltraSeg/config/dataset/wan_guan.yaml')
+    yaml_dir = str(ROOT / 'UltraSeg/config/dataset/wan_shortlong.yaml')
     dataset_cfg = yaml_load(yaml_dir)
     data_root = dataset_cfg['data_root']
     img_folder = dataset_cfg['img_dir']
@@ -131,9 +144,8 @@ if __name__ == '__main__':
     assert img_dir.exists(), f'{img_dir} does not exist'
     assert mask_dir.exists(), f'{mask_dir} does not exist'
     assert class_rgb_dir.exists(), f'{class_rgb_dir} does not exist'
-    assert object_dir.exists(), f'{object_dir} does not exist'
 
-    img_paths = list(img_dir.glob("*.png"))
+    img_paths = list(img_dir.glob("*.*"))
     num_total = len(img_paths)
     num_train = int(num_total * train_percent)
 
@@ -144,6 +156,8 @@ if __name__ == '__main__':
         rgb_mask_paths = list(class_rgb_dir.glob("*.png"))
         assert len(rgb_mask_paths) == len(img_paths), 'rgb_mask_paths and img_paths have different lengths'
         convert_rgb_labels_to_single_channel(class_rgb_dir, mask_dir, color_map)
+    else:
+        assert len(mask_paths) == len(img_paths), 'mask_paths and img_paths have different lengths'
 
     mask_paths = list(mask_dir.glob("*.png"))
     assert len(mask_paths) == len(img_paths), 'mask_paths and img_paths have different lengths'
@@ -155,14 +169,13 @@ if __name__ == '__main__':
         mask_path = str(path).replace(img_folder, mask_folder).replace('.png', '.png')
         class_rgb_path = str(path).replace(img_folder, class_rgb_folder).replace('.png', '.png')
         object_path = str(path).replace(img_folder, object_folder).replace('.png', '.png')
-
         if idx < num_train:
             shutil.copy(img_path, str(Path(data_root) / img_folder / 'train' / Path(img_path).name))
             shutil.copy(mask_path, str(Path(data_root) / mask_folder / 'train' / Path(mask_path).name))
             shutil.copy(class_rgb_path, str(Path(data_root) / class_rgb_folder / 'train' / Path(class_rgb_path).name))
-            shutil.copy(object_path, str(Path(data_root) / object_folder / 'train' / Path(object_path).name))
+            shutil.copy(object_path, str(Path(data_root) / object_folder / 'train' / Path(object_path).name)) if Path(object_path).exists() else None
         else:
             shutil.copy(img_path, str(Path(data_root) / img_folder / 'val' / Path(img_path).name))
             shutil.copy(mask_path, str(Path(data_root) / mask_folder / 'val' / Path(mask_path).name))
             shutil.copy(class_rgb_path, str(Path(data_root) / class_rgb_folder / 'val' / Path(class_rgb_path).name))
-            shutil.copy(object_path, str(Path(data_root) / object_folder / 'val' / Path(object_path).name))
+            shutil.copy(object_path, str(Path(data_root) / object_folder / 'val' / Path(object_path).name)) if Path(object_path).exists() else None

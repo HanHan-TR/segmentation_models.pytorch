@@ -45,7 +45,7 @@ class Ultrasound_Dataset(Dataset):
         self.data_root = data_root
         self.img_dir = img_dir
         self.mask_dir = mask_dir
-        assert mode in ['train', 'val', 'test'], f"mode should be one of ['train', 'val', 'test'], but got {mode}"
+        assert mode in ['train', 'val', 'test', 'all'], f"mode should be one of ['train', 'val', 'test', 'all'], but got {mode}"
         self.mode = mode
 
         def _glob_with_suffixes(folder: Path, suffixes: Union[str, List[str]]) -> List[Path]:
@@ -201,21 +201,22 @@ class Ultrasound_Dataset(Dataset):
 
 def create_dataset(dataset_cfg,
                    input_size=None,
+                   mean=None,
+                   std=None,
                    split='train',
                    rare_classes=None,
                    hard_samp=False,
                    use_roi: bool = False,
                    augment_version: int = 2):
 
-    normalize_type = dataset_cfg['normalize_type']
     dataset = Ultrasound_Dataset(data_root=dataset_cfg['data_root'],
                                  img_dir=dataset_cfg['img_dir'],
                                  mask_dir=dataset_cfg['mask_dir'],
                                  img_suffix=dataset_cfg['img_suffix'],
                                  mask_suffix=dataset_cfg['mask_suffix'],
                                  input_size=[input_size, input_size] if input_size is not None else dataset_cfg['input_size'],
-                                 mean=dataset_cfg['mean'][normalize_type],
-                                 std=dataset_cfg['std'][normalize_type],
+                                 mean=mean,
+                                 std=std,
                                  num_classes=dataset_cfg['num_classes'],
                                  classes=dataset_cfg['classes'],
                                  color_map=dataset_cfg['color_map'],

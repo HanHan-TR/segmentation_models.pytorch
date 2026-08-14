@@ -63,7 +63,7 @@ def get_stats(
     output: Union[torch.LongTensor, torch.FloatTensor],
     target: torch.LongTensor,
     mode: str,
-    ignore_index: Optional[int] = None,
+    ignore_index: Optional[Union[int, List[int]]] = None,
     threshold: Optional[Union[float, List[float]]] = None,
     num_classes: Optional[int] = None,
 ) -> Tuple[torch.LongTensor, torch.LongTensor, torch.LongTensor, torch.LongTensor]:
@@ -100,8 +100,9 @@ def get_stats(
             - ``'multiclass'``: 用于非互斥的多类别分割任务，每个像素可以属于多个类别
                 每个类别都有独立的通道，通道内属于该类的像素标记为1，其余为0
 
-        ignore_index (Optional[int]): Label to ignore on for metric computation.
-            **Not** supported for ``'binary'`` and ``'multilabel'`` modes.  Defaults to None.
+        ignore_index (Optional[Union[int, List[int]]]): Label or list of labels to ignore
+            for metric computation. **Not** supported for ``'binary'`` and ``'multilabel'`` modes.
+            Defaults to None.
         threshold (Optional[float, List[float]]): Binarization threshold for
             ``output`` in case of ``'binary'`` or ``'multilabel'`` modes. Defaults to None.
         num_classes (Optional[int]): Number of classes, necessary attribute
@@ -159,13 +160,16 @@ def get_stats(
             "``num_classes`` attribute should be not ``None`` for 'multiclass' mode."
         )
 
-    if ignore_index is not None and 0 <= ignore_index <= num_classes - 1:
-        raise ValueError(
-            f"``ignore_index`` should be outside the class values range, but got class values in range "
-            f"0..{num_classes - 1} and ``ignore_index={ignore_index}``. Hint: if you have ``ignore_index = 0``"
-            f"consirder subtracting ``1`` from your target and model output to make ``ignore_index = -1``"
-            f"and relevant class values started from ``0``."
-        )
+    if ignore_index is not None:
+        ignore_indices = ignore_index if isinstance(ignore_index, list) else [ignore_index]
+        for idx in ignore_indices:
+            if 0 <= idx <= num_classes - 1:
+                raise ValueError(
+                    f"``ignore_index`` should be outside the class values range, but got class values in range "
+                    f"0..{num_classes - 1} and ``ignore_index={idx}``. Hint: if you have ``ignore_index = 0``"
+                    f"consirder subtracting ``1`` from your target and model output to make ``ignore_index = -1``"
+                    f"and relevant class values started from ``0``."
+                )
 
     if mode == "multiclass":
         tp, fp, fn, tn = _get_stats_multiclass(output, target, num_classes, ignore_index)
@@ -183,13 +187,14 @@ def _get_stats_multiclass(
     output: torch.LongTensor,
     target: torch.LongTensor,
     num_classes: int,
-    ignore_index: Optional[int],
+    ignore_index: Optional[Union[int, List[int]]],
 ) -> Tuple[torch.LongTensor, torch.LongTensor, torch.LongTensor, torch.LongTensor]:
     batch_size, *dims = output.shape
     num_elements = torch.prod(torch.tensor(dims)).long()
 
     if ignore_index is not None:
-        ignore = target == ignore_index
+        ignore_indices = ignore_index if isinstance(ignore_index, list) else [ignore_index]
+        ignore = torch.isin(target, torch.tensor(ignore_indices, device=target.device))
         # 将 output 和 target 中需要忽略的位置设置为 -1，这样它们就不会被计入后续的统计中
         output = torch.where(ignore, -1, output)
         target = torch.where(ignore, -1, target)

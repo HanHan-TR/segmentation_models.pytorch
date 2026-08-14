@@ -1,16 +1,30 @@
 import math
-from os import path
+import argparse
+import platform
 import torch
 import torch.nn as nn
+from prettytable import PrettyTable
 from torch.utils.data import DataLoader
 from torch.optim import Optimizer
 from tqdm import tqdm
 from copy import deepcopy
 from typing import Union, Optional, List, Dict
 from pathlib import PosixPath, Path
+import sys
+
+FILE = Path(__file__).resolve()
+ROOT = FILE.parents[2]  # root directory
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))  # add ROOT to PATH
+
 from UltraSeg.logger.logger import TQDM_BAR_FORMAT, log_write
 import segmentation_models_pytorch as smp
 from UltraSeg.core.lr_scheduler import Scheduler
+from UltraSeg.core.fileio import yaml_load
+from UltraSeg.core.dataset import create_dataset
+from UltraSeg.inference import load_model
+
+IS_WINDOWS = platform.system() == 'Windows'
 
 
 def calculate_metrics_per_class(tp_all, fp_all, fn_all, tn_all):
@@ -415,7 +429,8 @@ def validate_one_epoch(epoch: int,
                        class_weights: Optional[List[float]] = None,
                        device: torch.device = torch.device('cuda'),
                        epochs: int = 100,
-                       model_type: str = 'ori'):
+                       model_type: str = 'ori',
+                       ignore_index: int = -1):
     model.eval().to(device)
     val_loss = []
     # Accumulate tp/fp/fn/tn batch-wise
@@ -428,8 +443,8 @@ def validate_one_epoch(epoch: int,
             images, targets = images.to(device), targets.to(device)
 
             logits = model(images)
-            loss = loss_fn(logits, targets)
-            val_loss.append(loss.item())
+            loss = loss_fn(logits, targets) if loss_fn is not None else None
+            val_loss.append(loss.item()) if loss is not None else None
 
             # postprocess
             probs = torch.softmax(logits, dim=1)
@@ -439,15 +454,15 @@ def validate_one_epoch(epoch: int,
                                                    target=targets.long(),
                                                    mode='multiclass',
                                                    num_classes=num_classes,
-                                                   ignore_index=-1)
+                                                   ignore_index=ignore_index)
             tp_all.append(tp.cpu())
             fp_all.append(fp.cpu())
             fn_all.append(fn.cpu())
             tn_all.append(tn.cpu())
-            pbar.set_postfix({f"{model_type} model val_loss": f"{(sum(val_loss) / len(val_loss)):.4f}"})
+            # pbar.set_postfix({f"{model_type} model val_loss": f"{(sum(val_loss) / len(val_loss)):.4f}"} if loss_fn is not None else {})
 
         # 聚合所有批次的 tp/fp/fn/tn，得到形状为[num_images, num_classes] 的张量
-        val_loss = sum(val_loss) / len(val_loss)
+        # val_loss = sum(val_loss) / len(val_loss)
         tp_all = torch.cat(tp_all, dim=0)
         fp_all = torch.cat(fp_all, dim=0)
         fn_all = torch.cat(fn_all, dim=0)
@@ -463,3 +478,92 @@ def validate_one_epoch(epoch: int,
                                                             class_weights=class_weights)
 
         return metrics_per_classes, metrics_all_classes, val_loss
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Train a segmentation model')
+    parser.add_argument('-r', '--res_dir', type=str,
+                        default='res/wrist-seg/best/timm-tf_efficientnet_lite1-no-att-no-roi-hard-samp-512-p22',
+                        help='Directory to save results')
+    parser.add_argument('-d', '--dataset_cfg', type=str,
+                        default='UltraSeg/config/dataset/wan_shortlong.yaml',
+                        help='dataset config file')
+
+    parser.add_argument('--model_name', default='ema_best.pth', help='checkpoint name to load')
+    parser.add_argument('-cls', '--num_classes', type=int, default=10, help='number of classes')
+    parser.add_argument('-ig', '--ignore_index', type=int, nargs='+', default=[-1],
+                        help='ignore indices for metrics calculation')
+    parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+
+    args = parser.parse_args()
+    # if 'LOCAL_RANK' not in os.environ:
+    #     os.environ['LOCAL_RANK'] = str(args.local_rank)
+
+    return args
+
+
+def print_metrics_table(metrics_per_classes, metrics_all_classes, class_names, logfile=None):
+    metrics_row = ["accuracy", "precision", "recall", "iou", "dice", "f2score"]
+    table = PrettyTable()
+    table.field_names = ["reduction"] + metrics_row
+    for key, value in metrics_all_classes.items():
+        data_row = []
+        for k in metrics_row:
+            v = value[k]
+            data_row.append(f"{v:.4f}")
+        table.add_row([key] + data_row)
+
+    table_cls = PrettyTable()
+    table_cls.field_names = ["metric"] + class_names
+
+    for key, value in metrics_per_classes.items():
+        data_rows = [key]
+        for class_idx in range(len(value)):
+            data_rows.append(f"{value[class_idx]:.4f}")
+        table_cls.add_row(data_rows)
+
+    log_write(f"Metrics for all classes:\n{table}\n", logfile)
+    log_write(f"Metrics per class:\n{table_cls}\n", logfile)
+
+
+if __name__ == '__main__':
+    opts = parse_args()
+
+    exp_dir = Path(opts.res_dir)
+    ckpt_path = Path(exp_dir) / 'weights' / opts.model_name
+
+    model, input_size, mean, std = load_model(ckpt_path)
+
+    dataset_cfg = yaml_load(opts.dataset_cfg)
+    dataset_name = Path(opts.dataset_cfg).stem
+    data_classes = dataset_cfg['classes'][:10]
+
+    logfile = exp_dir / f'test_on_{dataset_name}.log'
+    log_write(f"Testing on {dataset_name}, ignore_index: {opts.ignore_index}\n", logfile)
+
+    log_write(f"Checkpoint: {ckpt_path}\n", logfile)
+
+    validation_dataset = create_dataset(dataset_cfg=dataset_cfg,
+                                        split='all',
+                                        input_size=input_size, mean=mean, std=std)
+
+    val_loader = torch.utils.data.DataLoader(validation_dataset,
+                                             batch_size=16,
+                                             shuffle=False,
+                                             num_workers=4,
+                                             pin_memory=True,
+                                             persistent_workers=IS_WINDOWS,
+                                             prefetch_factor=4 if IS_WINDOWS else None)
+
+    metrics_per_classes, metrics_all_classes, _ = validate_one_epoch(epoch=0,
+                                                                     model=model,
+                                                                     val_loader=val_loader,
+                                                                     loss_fn=None,
+                                                                     num_classes=opts.num_classes if opts.num_classes is not None else dataset_cfg.get('num_classes'),
+                                                                     class_weights=None,
+                                                                     device=torch.device(f'cuda:{opts.device}' if torch.cuda.is_available() else f'cpu:{opts.device}'),
+                                                                     epochs=1,
+                                                                     model_type='ema_best',
+                                                                     ignore_index=opts.ignore_index)
+
+    print_metrics_table(metrics_per_classes, metrics_all_classes, data_classes, logfile=logfile)

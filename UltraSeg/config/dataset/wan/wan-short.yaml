@@ -1,0 +1,46 @@
+# 仅用于测试的数据集
+data_root: /home/t_wanghan/work/data/wan-short
+img_dir: JPEGImages
+mask_dir: Masks
+
+class_rgb_dir: SegmentationClass
+object_dir: SegmentationObject
+
+img_suffix: ['jpg', '.png']
+mask_suffix: ['.png']
+
+num_classes: 10
+
+num_training_samples: 0
+num_validation_samples: 0
+num_test_samples: 123
+
+image_height: 920
+image_width: 1270
+
+
+classes: [
+  0—背景,
+  1-拇长屈肌,
+  2-指浅屈肌,
+  3-指深屈肌,
+  4-掌长肌腱,
+  5-旋前方肌,
+  6-桡侧腕屈肌,
+  7-桡动脉,
+  8-正中神经,
+  9-肱桡肌
+]
+
+color_map: [
+  [0,0,0],
+  [32,32, 185],
+  [102, 245, 102],
+  [214, 41, 69],
+  [218, 70, 218],
+  [177, 70, 92],
+  [156, 63, 156],
+  [165, 32, 59],
+  [204, 204, 59],
+  [194, 87, 140]
+]

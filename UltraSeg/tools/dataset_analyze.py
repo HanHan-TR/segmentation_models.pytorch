@@ -81,7 +81,10 @@ def analyze_dataset(dataset_cfg: Union[dict, str], split: str = 'train'):
     # 计算平均面积
 
     for class_id in range(num_classes):
-        class_avg_area[class_id] = (class_total_area[class_id] / class_object_count[class_id]) / image_area * 100
+        if class_object_count[class_id] > 0:
+            class_avg_area[class_id] = (class_total_area[class_id] / class_object_count[class_id]) / image_area * 100
+        else:
+            class_avg_area[class_id] = 0.0
 
     # 准备结果
     result = {
@@ -95,24 +98,26 @@ def analyze_dataset(dataset_cfg: Union[dict, str], split: str = 'train'):
     return result
 
 
-def plot_statistics(train_result, val_result, stem: str, msg=''):
+def plot_statistics(train_result, val_result, all_result, stem: str, msg=''):
     """
     使用柱状图展示统计结果
 
     参数:
         train_result: dict, 训练集统计结果
         val_result: dict, 验证集统计结果
+        all_result: dict, 所有数据集统计结果
         stem: str, 文件名前缀
         msg: str, 数据集描述
     """
     plt.rcParams['font.sans-serif'] = ['SimHei', 'WenQuanYi Micro Hei', 'Noto Sans CJK SC', 'DejaVu Sans']
     plt.rcParams['axes.unicode_minus'] = False
 
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig, axes = plt.subplots(3, 2, figsize=(16, 12))
 
     datasets = [
         (train_result, '训练集', axes[0]),
         (val_result, '验证集', axes[1]),
+        (all_result, '所有数据集', axes[2])
     ]
 
     for result, split_name, (ax_count, ax_area) in datasets:
@@ -157,18 +162,13 @@ def plot_statistics(train_result, val_result, stem: str, msg=''):
 # 示例用法
 if __name__ == '__main__':
     # 设置您的mask文件夹路径
-    dataset_cfg = "UltraSeg/config/dataset/wrist.yaml"
+    dataset_cfg = "UltraSeg/config/dataset/wan_shortlong.yaml"
     stem = Path(dataset_cfg).stem
-    if stem == 'wrist':
-        msg = '腕部超声图像数据集'
-    elif stem == 'huai':
-        msg = '踝部超声图像数据集'
-    elif stem == 'wan_guan':
-        msg = '腕管部位超声图像数据集'
+    msg = '腕部超声图像数据集-长轴+短轴'
     # 分析数据集
     train_stats = analyze_dataset(dataset_cfg, split='train')
     val_stats = analyze_dataset(dataset_cfg, split='val')
-
-    if train_stats or val_stats:
-        plot_statistics(train_stats, val_stats, stem, msg)
+    all_stats = analyze_dataset(dataset_cfg, split='all')
+    if train_stats or val_stats or all_stats is not None:
+        plot_statistics(train_stats, val_stats, all_stats, stem, msg)
     print(f'统计结果已保存至 {stem}_dataset_statistics.png')
