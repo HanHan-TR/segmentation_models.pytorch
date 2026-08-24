@@ -127,7 +127,7 @@ if __name__ == '__main__':
     seed = init_random_seed(seed=42, device=device)
     set_random_seed(seed=seed, deterministic=True)
 
-    yaml_dir = str(ROOT / 'UltraSeg/config/dataset/wan_shortlong.yaml')
+    yaml_dir = str(ROOT / 'UltraSeg/config/dataset/zhou/zhou.yaml')
     dataset_cfg = yaml_load(yaml_dir)
     data_root = dataset_cfg['data_root']
     img_folder = dataset_cfg['img_dir']
@@ -148,8 +148,9 @@ if __name__ == '__main__':
     img_paths = list(img_dir.glob("*.*"))
     num_total = len(img_paths)
     num_train = int(num_total * train_percent)
+    num_train_val = int(num_total * (train_percent + val_percent))
 
-    print(f'Total images: {num_total}, Train images: {num_train}, Val images: {num_total - num_train}')
+    print(f'Total images: {num_total}, Train images: {num_train}, Val images: {num_train_val - num_train}, Test images: {num_total - num_train_val}')
 
     mask_paths = list(mask_dir.glob("*.png"))
     if len(mask_paths) == 0:
@@ -174,8 +175,13 @@ if __name__ == '__main__':
             shutil.copy(mask_path, str(Path(data_root) / mask_folder / 'train' / Path(mask_path).name))
             shutil.copy(class_rgb_path, str(Path(data_root) / class_rgb_folder / 'train' / Path(class_rgb_path).name))
             shutil.copy(object_path, str(Path(data_root) / object_folder / 'train' / Path(object_path).name)) if Path(object_path).exists() else None
-        else:
+        elif num_train <= idx and idx < num_train_val:
             shutil.copy(img_path, str(Path(data_root) / img_folder / 'val' / Path(img_path).name))
             shutil.copy(mask_path, str(Path(data_root) / mask_folder / 'val' / Path(mask_path).name))
             shutil.copy(class_rgb_path, str(Path(data_root) / class_rgb_folder / 'val' / Path(class_rgb_path).name))
             shutil.copy(object_path, str(Path(data_root) / object_folder / 'val' / Path(object_path).name)) if Path(object_path).exists() else None
+        else:
+            shutil.copy(img_path, str(Path(data_root) / img_folder / 'test' / Path(img_path).name))
+            shutil.copy(mask_path, str(Path(data_root) / mask_folder / 'test' / Path(mask_path).name))
+            shutil.copy(class_rgb_path, str(Path(data_root) / class_rgb_folder / 'test' / Path(class_rgb_path).name))
+            shutil.copy(object_path, str(Path(data_root) / object_folder / 'test' / Path(object_path).name)) if Path(object_path).exists() else None

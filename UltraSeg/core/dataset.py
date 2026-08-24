@@ -152,12 +152,17 @@ class Ultrasound_Dataset(Dataset):
         """
         rarity = 1.0 / np.log(1.1 + self.class_freq + 1e-12)
 
-        if ignore_index is not None:
+        # 对频率为 0 的空类别，直接设权重为 0，避免参与加权平均
+        empty_mask = self.class_freq == 0
+        rarity[empty_mask] = 0.0
+
+        if ignore_index is not None and 0 <= ignore_index < len(rarity):
             rarity[ignore_index] = 0.0
 
         # 可选：归一化到均值为1附近
         valid = rarity > 0
-        rarity[valid] = rarity[valid] / rarity[valid].mean()
+        if valid.any():
+            rarity[valid] = rarity[valid] / rarity[valid].mean()
 
         self.class_rarity = rarity
 

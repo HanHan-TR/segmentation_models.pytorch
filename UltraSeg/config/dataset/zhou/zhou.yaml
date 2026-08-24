@@ -1,0 +1,73 @@
+data_root: /home/t_wanghan/work/data/Zhou
+img_dir: JPEGImages
+mask_dir: Masks
+
+class_rgb_dir: SegmentationClass
+object_dir: SegmentationObject
+
+img_suffix: .png
+mask_suffix: .png
+
+num_classes: 19
+num_training_samples: 1601
+num_validation_samples: 458
+num_test_samples: 229
+image_height: 920
+image_width: 1270
+
+mean:
+  train_data: []  # [0.069, 0.074, 0.077]
+  imagenet: [0.485, 0.456, 0.406]
+
+std:
+  train_data: []  # [0.116, 0.126, 0.134]
+  imagenet: [0.229, 0.224, 0.225]
+
+normalize_type: imagenet
+
+# 没有样本的类别（训练集+验证集均为空），评估时会被忽略
+empty_classes: [11, 12]
+
+classes: [
+  0-背景,
+  1-伸肌总腱,
+  2-尺侧副韧带,
+  3-尺神经,
+  4-尺骨,
+  5-尺骨鹰嘴,
+  6-屈肌总腱,
+  7-桡侧副韧带,
+  8-桡侧腕长伸肌腱,
+  9-桡神经,
+  10-桡骨,
+  11-正中神经,
+  12-浅静脉,
+  13-肱三头肌腱,
+  14-肱二头肌腱,
+  15-肱动脉,
+  16-肱桡肌,
+  17-肱肌,
+  18-肱骨
+]
+
+color_map: [
+  [0,0,0],
+  [126,219,237],
+  [125,223,243],
+  [202,202,41],
+  [120,83,10],
+  [117,80,8],
+  [159,108,58],
+  [104,104,6],
+  [116,195,236],
+  [195,150,17],
+  [237,157,78],
+  [195,195,41],
+  [124,202,241],
+  [12,140,166],
+  [222,244,114],
+  [154,27,69],
+  [217,142,68],
+  [203,28,86],
+  [163,190,161]
+]

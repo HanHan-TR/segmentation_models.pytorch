@@ -15,11 +15,11 @@ image_height: 920
 image_width: 1270
 
 mean:
-  train_data: [0.069, 0.074, 0.077]
+  train_data: []  # [0.069, 0.074, 0.077]
   imagenet: [0.485, 0.456, 0.406]
 
 std:
-  train_data: [0.116, 0.126, 0.134]
+  train_data: []  # [0.116, 0.126, 0.134]
   imagenet: [0.229, 0.224, 0.225]
 
 normalize_type: imagenet

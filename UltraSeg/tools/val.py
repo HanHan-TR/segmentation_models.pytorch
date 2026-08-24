@@ -27,7 +27,7 @@ from UltraSeg.inference import load_model
 IS_WINDOWS = platform.system() == 'Windows'
 
 
-def calculate_metrics_per_class(tp_all, fp_all, fn_all, tn_all):
+def calculate_metrics_per_class(tp_all, fp_all, fn_all, tn_all, empty_classes=None):
     # 计算每个类别的 tp/fp/fn/tn
     tp_classes = tp_all.sum(dim=0, keepdim=True)
     fp_classes = fp_all.sum(dim=0, keepdim=True)
@@ -60,6 +60,22 @@ def calculate_metrics_per_class(tp_all, fp_all, fn_all, tn_all):
                                               tn=tn_classes,
                                               beta=2, reduction=None).squeeze(0)
 
+    # 用 0.0 替换空类别的 NaN 指标，避免传播到整体指标
+    if empty_classes is not None and len(empty_classes) > 0:
+        for c in empty_classes:
+            if torch.isnan(accuracy_classes[c]):
+                accuracy_classes[c] = 0.0
+            if torch.isnan(precision_classes[c]):
+                precision_classes[c] = 0.0
+            if torch.isnan(recall_classes[c]):
+                recall_classes[c] = 0.0
+            if torch.isnan(iou_classes[c]):
+                iou_classes[c] = 0.0
+            if torch.isnan(dice_classes[c]):
+                dice_classes[c] = 0.0
+            if torch.isnan(f2score_classes[c]):
+                f2score_classes[c] = 0.0
+
     metrics_classes = {"accuracy": accuracy_classes,
                        "precision": precision_classes,
                        "recall": recall_classes,
@@ -70,7 +86,7 @@ def calculate_metrics_per_class(tp_all, fp_all, fn_all, tn_all):
     return metrics_classes
 
 
-def calculate_metrics_all_classes(tp_all, fp_all, fn_all, tn_all, class_weights=None):
+def calculate_metrics_all_classes(tp_all, fp_all, fn_all, tn_all, class_weights=None, empty_classes=None):
     metrics = {"accuracy": 0,
                "precision": 0,
                "recall": 0,
@@ -82,8 +98,16 @@ def calculate_metrics_all_classes(tp_all, fp_all, fn_all, tn_all, class_weights=
     if class_weights is None:
         reductions = ['micro', 'macro', 'macro-imagewise']
 
-    results = {}
+    # 构造 ignore_index：对于 macro/weighted，排除空类别（让 smp 不将其纳入平均）
+    # smp 的 reduction 中 macro/macro-imagewise 会自动跳过 tp+fp+fn=0 的类别，
+    # 但我们仍然确保空类别在 class_weights 中权重为 0
     ori_class_weights = class_weights
+    if empty_classes is not None and len(empty_classes) > 0 and ori_class_weights is not None:
+        ori_class_weights = ori_class_weights.copy() if isinstance(ori_class_weights, list) else list(ori_class_weights)
+        for c in empty_classes:
+            ori_class_weights[c] = 0.0
+
+    results = {}
     for reduction in reductions:
         class_weights = ori_class_weights
         if reduction not in results:
@@ -430,7 +454,8 @@ def validate_one_epoch(epoch: int,
                        device: torch.device = torch.device('cuda'),
                        epochs: int = 100,
                        model_type: str = 'ori',
-                       ignore_index: int = -1):
+                       ignore_index: int = -1,
+                       empty_classes: Optional[List[int]] = None):
     model.eval().to(device)
     val_loss = []
     # Accumulate tp/fp/fn/tn batch-wise
@@ -462,20 +487,21 @@ def validate_one_epoch(epoch: int,
             # pbar.set_postfix({f"{model_type} model val_loss": f"{(sum(val_loss) / len(val_loss)):.4f}"} if loss_fn is not None else {})
 
         # 聚合所有批次的 tp/fp/fn/tn，得到形状为[num_images, num_classes] 的张量
-        # val_loss = sum(val_loss) / len(val_loss)
+        val_loss = sum(val_loss) / len(val_loss) if loss_fn is not None else None
         tp_all = torch.cat(tp_all, dim=0)
         fp_all = torch.cat(fp_all, dim=0)
         fn_all = torch.cat(fn_all, dim=0)
         tn_all = torch.cat(tn_all, dim=0)
 
-        metrics_per_classes = calculate_metrics_per_class(tp_all, fp_all, fn_all, tn_all)
+        metrics_per_classes = calculate_metrics_per_class(tp_all, fp_all, fn_all, tn_all, empty_classes=empty_classes)
 
         # micro 平均指标
         metrics_all_classes = calculate_metrics_all_classes(tp_all,
                                                             fp_all,
                                                             fn_all,
                                                             tn_all,
-                                                            class_weights=class_weights)
+                                                            class_weights=class_weights,
+                                                            empty_classes=empty_classes)
 
         return metrics_per_classes, metrics_all_classes, val_loss
 

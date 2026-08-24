@@ -162,9 +162,9 @@ def plot_statistics(train_result, val_result, all_result, stem: str, msg=''):
 # 示例用法
 if __name__ == '__main__':
     # 设置您的mask文件夹路径
-    dataset_cfg = "UltraSeg/config/dataset/wan_shortlong.yaml"
+    dataset_cfg = "UltraSeg/config/dataset/zhou/zhou.yaml"
     stem = Path(dataset_cfg).stem
-    msg = '腕部超声图像数据集-长轴+短轴'
+    msg = '肘部超声图像数据集'
     # 分析数据集
     train_stats = analyze_dataset(dataset_cfg, split='train')
     val_stats = analyze_dataset(dataset_cfg, split='val')

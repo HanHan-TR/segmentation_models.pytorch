@@ -65,6 +65,9 @@ def train(config):
     data_classes = dataset_cfg['classes']
     data_classes = [f"{item:^8}" for item in data_classes]
 
+    # 读取空类别配置（无样本的类别），用于评估时忽略
+    empty_classes = dataset_cfg.get('empty_classes', []) or []
+
     # save configs
     yaml_save(cfg_dir / 'model.yaml', model_cfg)
     yaml_save(cfg_dir / 'dataset.yaml', dataset_cfg)
@@ -76,8 +79,11 @@ def train(config):
     set_random_seed(seed, deterministic=True)
 
     # Create dataset
+    normalize_type = dataset_cfg.get('normalize_type')
     train_dataset = create_dataset(dataset_cfg,
                                    input_size=config.input_size,
+                                   mean=dataset_cfg['mean'][normalize_type],
+                                   std=dataset_cfg['std'][normalize_type],
                                    split='train',
                                    use_roi=config.use_roi,
                                    hard_samp=config.hard_samp,
@@ -85,6 +91,8 @@ def train(config):
                                    augment_version=config.augment_version)
     val_dataset = create_dataset(dataset_cfg,
                                  input_size=config.input_size,
+                                 mean=dataset_cfg['mean'][normalize_type],
+                                 std=dataset_cfg['std'][normalize_type],
                                  split='val',
                                  use_roi=config.use_roi,
                                  hard_samp=False,
@@ -111,6 +119,11 @@ def train(config):
                                   pin_memory=True,
                                   persistent_workers=IS_WINDOWS,
                                   prefetch_factor=4 if IS_WINDOWS else None)
+
+    # 空类别：将 class_rarity 对应位置设为 0，避免影响 weighted 平均指标
+    if len(empty_classes) > 0:
+        for c in empty_classes:
+            train_dataset.class_rarity[c] = 0.0
 
     val_loader = torch.utils.data.DataLoader(val_dataset,
                                              batch_size=config.batch_size,
@@ -216,7 +229,8 @@ def train(config):
                                                                                 class_weights=train_dataset.class_rarity,
                                                                                 device=device,
                                                                                 epochs=epochs,
-                                                                                model_type='ori')
+                                                                                model_type='ori',
+                                                                                empty_classes=empty_classes)
 
         wandb_summary.update({"epoch": epoch,
                               "loss/ori_train": train_loss,
@@ -261,7 +275,8 @@ def train(config):
                                                                                                 class_weights=train_dataset.class_rarity,
                                                                                                 device=device,
                                                                                                 epochs=epochs,
-                                                                                                model_type='ema')
+                                                                                                model_type='ema',
+                                                                                                empty_classes=empty_classes)
             wandb_summary.update({"loss/ema_val": ema_val_loss})
 
             ema_table = PrettyTable()
@@ -376,7 +391,7 @@ def parse_args():
     parser.add_argument('--arch', type=str, default='unet', help='architecture of the model')
     parser.add_argument('--encoder_name', type=str, default='timm-tf_efficientnet_lite1', help='encoder name for the model')
     parser.add_argument('--encoder_init_weights', type=str, default='imagenet', help='initialize encoder weights')
-    parser.add_argument('--dataset_cfg', type=str, default='UltraSeg/config/dataset/wan_guanBG.yaml', help='dataset config file')
+    parser.add_argument('--dataset_cfg', type=str, default='UltraSeg/config/dataset/zhou/zhou.yaml', help='dataset config file')
     parser.add_argument('--input_size', type=int, default=512, help='input size for training and validation')
     parser.add_argument('--num_workers', type=int, default=8, help='number of workers for data loading')
     parser.add_argument('--att_type', type=str, default=None, help='decoder attention type for training, none or scse')
@@ -390,9 +405,9 @@ def parse_args():
     parser.add_argument('--work-dir',
                         default=ROOT / 'res', help='the dir to save logs and models')
     parser.add_argument('--project',
-                        default='wan_guan-seg', help='the project name to save logs')
-    parser.add_argument('--name', default='r', help='save to work-dir/project/name, and wandb run name')
-    parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+                        default='zhou-seg', help='the project name to save logs')
+    parser.add_argument('--name', default='exp', help='save to work-dir/project/name, and wandb run name')
+    parser.add_argument('--device', default='2', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--load_from_ckpt', type=str, default=None, help='load from checkpoint')
     parser.add_argument('--sweep_count', type=int, default=60, help='sweep count for wandb agent')
 
