@@ -88,7 +88,8 @@ def train(config):
                                    use_roi=config.use_roi,
                                    hard_samp=config.hard_samp,
                                    rare_classes=config.rare_classes,
-                                   augment_version=config.augment_version)
+                                   augment_version=config.augment_version,
+                                   augment_cfg_save_path=cfg_dir / 'augment_cfg.json')
     val_dataset = create_dataset(dataset_cfg,
                                  input_size=config.input_size,
                                  mean=dataset_cfg['mean'][normalize_type],
@@ -396,20 +397,20 @@ def parse_args():
     parser.add_argument('--num_workers', type=int, default=8, help='number of workers for data loading')
     parser.add_argument('--att_type', type=str, default=None, help='decoder attention type for training, none or scse')
     parser.add_argument('--use_roi', action='store_true', help='use roi for training')
-    parser.add_argument('--hard_samp', action='store_true', help='use hard sampling for training')
-    parser.add_argument('--augment_version', type=int, default=2, help='augment version for training')
-    parser.add_argument('--rare_classes', type=int, nargs='+',
+    parser.add_argument('-hs', '--hard_samp', action='store_true', help='use hard sampling for training')
+    parser.add_argument('-av', '--augment_version', type=int, default=2, help='augment version for training')
+    parser.add_argument('-rc', '--rare_classes', type=int, nargs='+',
                         default=None,  # 腕管：[1, 3, 6, 8, 11]
                         help='rare classes for training, e.g. --rare_classes 0 1 2')
-    parser.add_argument('--sweep_cfg', type=str, default='UltraSeg/config/hyper/ema-sweep.yaml', help='hyperparameters config file')
+    parser.add_argument('--sweep_cfg', type=str, default='UltraSeg/config/hyper/zhou-bayes-sweep.yaml', help='hyperparameters config file')
     parser.add_argument('--work-dir',
                         default=ROOT / 'res', help='the dir to save logs and models')
     parser.add_argument('--project',
                         default='zhou-seg', help='the project name to save logs')
-    parser.add_argument('--name', default='exp', help='save to work-dir/project/name, and wandb run name')
-    parser.add_argument('--device', default='2', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('-n', '--name', default='exp', help='save to work-dir/project/name, and wandb run name')
+    parser.add_argument('-d', '--device', default='2', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--load_from_ckpt', type=str, default=None, help='load from checkpoint')
-    parser.add_argument('--sweep_count', type=int, default=60, help='sweep count for wandb agent')
+    parser.add_argument('-sc', '--sweep_count', type=int, default=60, help='sweep count for wandb agent')
 
     args = parser.parse_args()
 
@@ -478,9 +479,9 @@ if __name__ == '__main__':
 
     sweep_configuration = {
         "name": sweep_name,
-        "method": "random",
+        "method": "bayes",
         "metric": {"goal": "maximize",
-                   "name": "score/ema"},
+                   "name": "best_ema/metric(macro)/dice"},
         "parameters": {}
     }
     sweep_parameters = yaml_load(opts.sweep_cfg)

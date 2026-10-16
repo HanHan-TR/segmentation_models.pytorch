@@ -40,7 +40,8 @@ class Ultrasound_Dataset(Dataset):
                  augment_version: int = 2,
                  use_roi: bool = False,
                  rare_classes: list = None,
-                 hard_samp: bool = False):
+                 hard_samp: bool = False,
+                 augment_cfg_save_path: str = None):
         super().__init__()
         self.data_root = data_root
         self.img_dir = img_dir
@@ -91,7 +92,8 @@ class Ultrasound_Dataset(Dataset):
                                                              mean=mean,
                                                              std=std,
                                                              version=augment_version,
-                                                             rare_classes=self.rare_classes)
+                                                             rare_classes=self.rare_classes,
+                                                             augment_cfg_save_path=augment_cfg_save_path)
         self.augment_pipeline = train_pipeline if mode == 'train' else val_pipeline
 
     def __len__(self):
@@ -212,7 +214,8 @@ def create_dataset(dataset_cfg,
                    rare_classes=None,
                    hard_samp=False,
                    use_roi: bool = False,
-                   augment_version: int = 2):
+                   augment_version: int = 2,
+                   augment_cfg_save_path=None):
 
     dataset = Ultrasound_Dataset(data_root=dataset_cfg['data_root'],
                                  img_dir=dataset_cfg['img_dir'],
@@ -229,5 +232,6 @@ def create_dataset(dataset_cfg,
                                  augment_version=augment_version,
                                  rare_classes=rare_classes,
                                  hard_samp=hard_samp,
-                                 use_roi=use_roi)
+                                 use_roi=use_roi,
+                                 augment_cfg_save_path=augment_cfg_save_path)
     return dataset

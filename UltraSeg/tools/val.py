@@ -1,5 +1,6 @@
 import math
 import argparse
+import json
 import platform
 import torch
 import torch.nn as nn
@@ -11,6 +12,12 @@ from copy import deepcopy
 from typing import Union, Optional, List, Dict
 from pathlib import PosixPath, Path
 import sys
+
+try:
+    import openvino as ov
+    HAS_OPENVINO = True
+except ImportError:
+    HAS_OPENVINO = False
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[2]  # root directory
@@ -25,6 +32,131 @@ from UltraSeg.core.dataset import create_dataset
 from UltraSeg.inference import load_model
 
 IS_WINDOWS = platform.system() == 'Windows'
+
+
+class OpenVINOModel:
+    """Wrapper for OpenVINO IR model that mimics PyTorch nn.Module inference interface."""
+
+    def __init__(self, xml_path: Path, device: str = "CPU"):
+        if not HAS_OPENVINO:
+            raise ImportError("openvino is not installed. Run: pip install openvino")
+        self.xml_path = Path(xml_path)
+        if not self.xml_path.exists():
+            raise FileNotFoundError(f"OpenVINO IR file not found: {xml_path}")
+        self.core = ov.Core()
+        self.ov_model = self.core.read_model(str(self.xml_path))
+        self.compiled_model = self.core.compile_model(self.ov_model, device)
+
+    def eval(self):
+        """No-op: OpenVINO models are always in inference mode (no training mode)."""
+        return self
+
+    def to(self, device):
+        """No-op: Device is set at compile time and cannot be changed."""
+        return self
+
+    def __call__(self, input_tensor):
+        if isinstance(input_tensor, torch.Tensor):
+            input_np = input_tensor.cpu().numpy()
+        else:
+            input_np = input_tensor
+        if input_np.ndim == 4 and input_np.shape[0] > 1:
+            results = [self.compiled_model(input_np[i:i + 1])[0] for i in range(input_np.shape[0])]
+            result = np.concatenate(results, axis=0)
+        else:
+            result = self.compiled_model(input_np)[0]
+        return torch.from_numpy(result)
+
+
+def load_ov_model_meta(xml_path: Path):
+    """Extract metadata (input_size, mean, std, num_classes) from an OpenVINO IR model.
+
+    The model's input/output shapes are read directly from the IR.
+    Mean/std are read from a companion .yaml or .json file (same stem as the .xml),
+    falling back to ImageNet defaults if not found.
+    """
+    if not HAS_OPENVINO:
+        raise ImportError("openvino is not installed. Run: pip install openvino")
+    core = ov.Core()
+    ov_model = core.read_model(str(xml_path))
+
+    def _to_int(val):
+        import numpy as np
+        if isinstance(val, (list, tuple, np.ndarray)):
+            val = val[0] if len(val) > 0 else 512
+        return int(val)
+
+    def _flatten_input_size(val):
+        import numpy as np
+        result = []
+
+        def _extract(x):
+            if isinstance(x, (int, float, np.integer, np.floating)):
+                result.append(int(x))
+            elif isinstance(x, (list, tuple, np.ndarray)):
+                for item in x:
+                    _extract(item)
+            else:
+                try:
+                    result.append(int(x))
+                except Exception:
+                    result.append(512)
+        _extract(val)
+        while len(result) < 2:
+            result.append(512)
+        return [result[0], result[1]]
+
+    # ---- input size from model input shape (expects [1, 3, H, W] or [1, 3, H, W]) ----
+    input_shape = ov_model.input(0).get_shape()
+    log_write(f"DEBUG: OpenVINO input_shape={input_shape}, type={type(input_shape)}\n")
+    log_write(f"DEBUG: input_shape[2]={input_shape[2]}, type={type(input_shape[2])}\n" if len(input_shape) > 2 else "DEBUG: input_shape length < 3\n")
+
+    if len(input_shape) == 4:
+        h, w = _to_int(input_shape[2]), _to_int(input_shape[3])
+        input_size = [h, w]
+    elif len(input_shape) == 3:
+        h, w = _to_int(input_shape[1]), _to_int(input_shape[2])
+        input_size = [h, w]
+    else:
+        input_size = [512, 512]
+
+    log_write(f"DEBUG: raw input_size={input_size}, types={[type(x) for x in input_size]}\n")
+
+    input_size = _flatten_input_size(input_size)
+    log_write(f"DEBUG: flattened input_size={input_size}, types={[type(x) for x in input_size]}\n")
+
+    # ---- num_classes from model output shape ([1, C, H, W]) ----
+    output_shape = ov_model.output(0).get_shape()
+    num_classes = _to_int(output_shape[1]) if len(output_shape) >= 2 else None
+
+    # ---- mean / std from companion metadata file ----
+    mean, std = None, None
+    xml_path = xml_path if isinstance(xml_path, Path) else Path(xml_path)
+    for suffix in ['.yaml', '.yml', '.json']:
+        meta_path = xml_path.with_suffix(suffix)
+        if meta_path.exists():
+            if suffix == '.json':
+                with open(meta_path, 'r') as f:
+                    meta = json.load(f)
+            else:
+                import yaml
+                with open(meta_path, 'r') as f:
+                    meta = yaml.safe_load(f)
+            if isinstance(meta, dict):
+                mean = meta.get('mean', mean)
+                std = meta.get('std', std)
+            if mean is not None and std is not None:
+                break
+
+    if mean is None:
+        mean = [0.485, 0.456, 0.406]
+    if std is None:
+        std = [0.229, 0.224, 0.225]
+
+    mean = [float(m) for m in mean]
+    std = [float(s) for s in std]
+
+    return input_size, mean, std, num_classes
 
 
 def calculate_metrics_per_class(tp_all, fp_all, fn_all, tn_all, empty_classes=None):
@@ -455,8 +587,12 @@ def validate_one_epoch(epoch: int,
                        epochs: int = 100,
                        model_type: str = 'ori',
                        ignore_index: int = -1,
-                       empty_classes: Optional[List[int]] = None):
-    model.eval().to(device)
+                       empty_classes: Optional[List[int]] = None,
+                       is_ov_model: bool = False):
+    if is_ov_model:
+        pass
+    else:
+        model.eval().to(device)
     val_loss = []
     # Accumulate tp/fp/fn/tn batch-wise
     tp_all, fp_all, fn_all, tn_all = [], [], [], []
@@ -465,7 +601,8 @@ def validate_one_epoch(epoch: int,
 
     with torch.no_grad():
         for (images, targets) in pbar:
-            images, targets = images.to(device), targets.to(device)
+            if not is_ov_model:
+                images, targets = images.to(device), targets.to(device)
 
             logits = model(images)
             loss = loss_fn(logits, targets) if loss_fn is not None else None
@@ -508,18 +645,18 @@ def validate_one_epoch(epoch: int,
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a segmentation model')
-    parser.add_argument('-r', '--res_dir', type=str,
-                        default='res/wrist-seg/best/timm-tf_efficientnet_lite1-no-att-no-roi-hard-samp-512-p22',
-                        help='Directory to save results')
+    parser.add_argument('-cp', '--checkpoint', type=str,
+                        default='res/zhou-seg/best/timm-tf_efficientnet_lite1-no-att-no-roi-hard-samp-512-exp29/weights/ema_best.pth',
+                        help='Path to model checkpoint (.pth) or OpenVINO IR model (.xml)')
     parser.add_argument('-d', '--dataset_cfg', type=str,
-                        default='UltraSeg/config/dataset/wan_shortlong.yaml',
+                        default='UltraSeg/config/dataset/zhou/zhou.yaml',
                         help='dataset config file')
-
-    parser.add_argument('--model_name', default='ema_best.pth', help='checkpoint name to load')
-    parser.add_argument('-cls', '--num_classes', type=int, default=10, help='number of classes')
+    parser.add_argument('--split', default='test', help='split to use for validation')
+    parser.add_argument('-cls', '--num_classes', type=int, default=19, help='number of classes (auto-detected for OpenVINO models if not set)')
     parser.add_argument('-ig', '--ignore_index', type=int, nargs='+', default=[-1],
                         help='ignore indices for metrics calculation')
     parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--ov_device', default='CPU', help='OpenVINO inference device, e.g. CPU or GPU (only used for .xml models)')
 
     args = parser.parse_args()
     # if 'LOCAL_RANK' not in os.environ:
@@ -555,23 +692,89 @@ def print_metrics_table(metrics_per_classes, metrics_all_classes, class_names, l
 if __name__ == '__main__':
     opts = parse_args()
 
-    exp_dir = Path(opts.res_dir)
-    ckpt_path = Path(exp_dir) / 'weights' / opts.model_name
+    ckpt_path = Path(opts.checkpoint)
+    # auto-detect model format by file extension
+    is_ov_model = ckpt_path.suffix == '.xml'
 
-    model, input_size, mean, std = load_model(ckpt_path)
+    if is_ov_model:
+        if not HAS_OPENVINO:
+            raise ImportError("openvino is not installed. Run: pip install openvino")
+
+        model = OpenVINOModel(ckpt_path, device=opts.ov_device)
+        input_size, mean, std, ov_num_classes = load_ov_model_meta(ckpt_path)
+
+        if opts.num_classes is None:
+            opts.num_classes = ov_num_classes
+
+        # exp_dir: use parent of the .xml file as output directory
+        exp_dir = ckpt_path.parents[1] if len(ckpt_path.parents) >= 2 else ckpt_path.parent
+
+        log_write(f"Loaded OpenVINO IR model from {ckpt_path}\n"
+                  f"  input_size={input_size}, num_classes={opts.num_classes}\n"
+                  f"  device={opts.ov_device}\n")
+    else:
+        model, input_size, mean, std = load_model(ckpt_path)
+        exp_dir = ckpt_path.parents[2]
+
+        if opts.num_classes is None:
+            opts.num_classes = 10  # fallback default for PyTorch checkpoints
 
     dataset_cfg = yaml_load(opts.dataset_cfg)
     dataset_name = Path(opts.dataset_cfg).stem
-    data_classes = dataset_cfg['classes'][:10]
+    data_classes = dataset_cfg['classes'][:opts.num_classes] if opts.num_classes is not None else dataset_cfg['classes'][:10]
 
-    logfile = exp_dir / f'test_on_{dataset_name}.log'
-    log_write(f"Testing on {dataset_name}, ignore_index: {opts.ignore_index}\n", logfile)
+    logfile = exp_dir / f'test_on_{dataset_name}_{opts.split}.log'
+    logfile.parent.mkdir(parents=True, exist_ok=True)
 
+    model_name = "OpenVINO" if is_ov_model else "PyTorch"
+    log_write(f"Testing [{model_name}] on {dataset_name} {opts.split}, ignore_index: {opts.ignore_index}\n", logfile)
     log_write(f"Checkpoint: {ckpt_path}\n", logfile)
 
-    validation_dataset = create_dataset(dataset_cfg=dataset_cfg,
-                                        split='all',
-                                        input_size=input_size, mean=mean, std=std)
+    if isinstance(input_size, int):
+        input_size = [input_size, input_size]
+    elif isinstance(input_size, (list, tuple)):
+        import numpy as np
+        flat = []
+
+        def _extract(x):
+            if isinstance(x, (int, float, np.integer, np.floating)):
+                flat.append(int(x))
+            elif isinstance(x, (list, tuple, np.ndarray)):
+                for item in x:
+                    _extract(item)
+        _extract(input_size)
+        if len(flat) >= 2:
+            input_size = [flat[0], flat[1]]
+        elif len(flat) == 1:
+            input_size = [flat[0], flat[0]]
+        else:
+            input_size = [512, 512]
+    else:
+        input_size = [512, 512]
+
+    log_write(f"DEBUG: final input_size for dataset={input_size}, types={[type(x) for x in input_size]}\n")
+
+    from UltraSeg.core.dataset import Ultrasound_Dataset
+
+    if is_ov_model:
+        validation_dataset = Ultrasound_Dataset(data_root=dataset_cfg['data_root'],
+                                                img_dir=dataset_cfg['img_dir'],
+                                                mask_dir=dataset_cfg['mask_dir'],
+                                                img_suffix=dataset_cfg['img_suffix'],
+                                                mask_suffix=dataset_cfg['mask_suffix'],
+                                                input_size=input_size,
+                                                mean=mean,
+                                                std=std,
+                                                num_classes=dataset_cfg['num_classes'],
+                                                classes=dataset_cfg['classes'],
+                                                color_map=dataset_cfg['color_map'],
+                                                mode=opts.split,
+                                                augment_version=2)
+    else:
+        validation_dataset = create_dataset(dataset_cfg=dataset_cfg,
+                                            split=opts.split,
+                                            input_size=input_size[0] if isinstance(input_size, (list, tuple)) else input_size,
+                                            mean=mean, std=std)
 
     val_loader = torch.utils.data.DataLoader(validation_dataset,
                                              batch_size=16,
@@ -581,15 +784,19 @@ if __name__ == '__main__':
                                              persistent_workers=IS_WINDOWS,
                                              prefetch_factor=4 if IS_WINDOWS else None)
 
-    metrics_per_classes, metrics_all_classes, _ = validate_one_epoch(epoch=0,
-                                                                     model=model,
-                                                                     val_loader=val_loader,
-                                                                     loss_fn=None,
-                                                                     num_classes=opts.num_classes if opts.num_classes is not None else dataset_cfg.get('num_classes'),
-                                                                     class_weights=None,
-                                                                     device=torch.device(f'cuda:{opts.device}' if torch.cuda.is_available() else f'cpu:{opts.device}'),
-                                                                     epochs=1,
-                                                                     model_type='ema_best',
-                                                                     ignore_index=opts.ignore_index)
+    dev = torch.device(f'cuda:{opts.device}' if torch.cuda.is_available() and opts.device != 'cpu' else 'cpu')
+
+    metrics_per_classes, metrics_all_classes, _ = validate_one_epoch(
+        epoch=0,
+        model=model,
+        val_loader=val_loader,
+        loss_fn=None,
+        num_classes=opts.num_classes if opts.num_classes is not None else dataset_cfg.get('num_classes'),
+        class_weights=None,
+        device=dev,
+        epochs=1,
+        model_type='ema_best',
+        empty_classes=opts.ignore_index,
+        is_ov_model=is_ov_model)
 
     print_metrics_table(metrics_per_classes, metrics_all_classes, data_classes, logfile=logfile)

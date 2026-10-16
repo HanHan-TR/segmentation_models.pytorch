@@ -1,0 +1,60 @@
+seed:
+  value: 42
+
+epochs:
+  values: [100, 120, 140]
+
+batch_size:
+  values: [16, 32]
+
+optimizer:
+  value: SGD
+
+weight_decay:
+  distribution: uniform
+  min: 0.00001
+  max: 0.0004
+
+momentum:
+  distribution: uniform
+  min: 0.94
+  max: 0.99
+
+loss_type:
+  values:
+    - [dice, bce]
+    - [dice, focal]
+
+warmup_type:
+  value: cosine 
+
+warmup_epochs_ratio:
+  value: 0.3
+
+warmup_start_factor:
+  value: 0.01
+
+main_lr_type:
+  value: cosine
+
+decoder_lr:
+  distribution: uniform
+  min: 0.03
+  max: 0.095
+
+encoder_lr_factor:
+  distribution: uniform
+  min: 0.15
+  max: 0.48
+
+ema_decay:
+  distribution: q_uniform
+  min: 0.90
+  max: 0.985
+  q: 0.005
+
+
+alpha:
+  distribution: uniform
+  min: 0.25
+  max: 0.75

@@ -177,24 +177,24 @@ def visualize_result(original_img, pred_mask, gt_mask, color_map, class_names=No
 
     # 水平拼接
     combined = np.hstack((pred_overlay, gt_overlay))
-    return combined
+    return combined, pred_overlay, gt_overlay
 
 
 def main():
     parser = argparse.ArgumentParser(description='语义分割模型推理')
     parser.add_argument('--input', type=str,
-                        default='/home/t_wanghan/work/data/wan_shortlong/JPEGImages/all',
+                        default='/home/t_wanghan/work/data/WanGuan-zhuanjia/JPEGImages/val',
                         help='输入图像路径或包含图像的文件夹路径')
     parser.add_argument('--gt', type=str,
-                        default='/home/t_wanghan/work/data/wan_shortlong/Masks/all',
+                        default='/home/t_wanghan/work/data/WanGuan-zhuanjia/Masks/val',
                         help='真实标签图像路径或包含标签的文件夹路径')
     parser.add_argument('--output', default='inference_results', help='输出文件夹路径')
     parser.add_argument('--checkpoint', type=str,
-                        default='res/wrist-seg/best/timm-tf_efficientnet_lite1-p22-tuneWithBG/weights/ema_best.pth',
+                        default='res/wan_guan-seg/best/timm-tf_efficientnet_lite1-no-att-no-roi-hard-samp-512-exp41/weights/ema_best.pth',
                         help='训练好的模型checkpoint路径')
-    parser.add_argument('--dataset_cfg', default='UltraSeg/config/dataset/wan/wan_shortlong.yaml', help='数据集配置文件路径')
-    parser.add_argument('--split', type=str, default='all', help='数据集划分，选择all/train/val/test')
-    parser.add_argument('--input_size', type=int, default=384, help='模型输入尺寸')
+    parser.add_argument('--dataset_cfg', default='UltraSeg/config/dataset/wanguan/wan_guan.yaml', help='数据集配置文件路径')
+    parser.add_argument('--split', type=str, default='val', help='数据集划分，选择all/train/val/test')
+    parser.add_argument('--input_size', type=int, default=512, help='模型输入尺寸')
     parser.add_argument('--device', default='0', help='cuda设备，如 0 或 cpu')
 
     args = parser.parse_args()
@@ -253,12 +253,18 @@ def main():
             gt_mask = None
 
         # 可视化结果
-        result = visualize_result(original_img, pred_mask, gt_mask, color_map, class_names)
+        combined, pred_overlay, gt_overlay = visualize_result(original_img, pred_mask, gt_mask, color_map, class_names)
 
         # 保存结果
         output_name = img_path.stem + '_pred_gt.jpg'
         output_path = output_dir / output_name
-        cv2.imwrite(str(output_path), cv2.cvtColor(result, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(str(output_path), cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
+        # 保存预测结果和真实标签结果
+        pred_output_path = output_dir / (img_path.stem + '_pred.jpg')
+        cv2.imwrite(str(pred_output_path), cv2.cvtColor(pred_overlay, cv2.COLOR_RGB2BGR))
+        gt_output_path = output_dir / (img_path.stem + '_gt.jpg')
+        cv2.imwrite(str(gt_output_path), cv2.cvtColor(gt_overlay, cv2.COLOR_RGB2BGR))
+
         print(f"Result saved to {output_path}")
 
 
