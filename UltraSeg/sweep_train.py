@@ -392,7 +392,7 @@ def parse_args():
     parser.add_argument('--arch', type=str, default='unet', help='architecture of the model')
     parser.add_argument('--encoder_name', type=str, default='timm-tf_efficientnet_lite1', help='encoder name for the model')
     parser.add_argument('--encoder_init_weights', type=str, default='imagenet', help='initialize encoder weights')
-    parser.add_argument('--dataset_cfg', type=str, default='UltraSeg/config/dataset/zhou/zhou.yaml', help='dataset config file')
+    parser.add_argument('--dataset_cfg', type=str, default='UltraSeg/config/dataset/zhuiguan/zhuiguan.yaml', help='dataset config file')
     parser.add_argument('--input_size', type=int, default=512, help='input size for training and validation')
     parser.add_argument('--num_workers', type=int, default=8, help='number of workers for data loading')
     parser.add_argument('--att_type', type=str, default=None, help='decoder attention type for training, none or scse')
@@ -402,11 +402,11 @@ def parse_args():
     parser.add_argument('-rc', '--rare_classes', type=int, nargs='+',
                         default=None,  # 腕管：[1, 3, 6, 8, 11]
                         help='rare classes for training, e.g. --rare_classes 0 1 2')
-    parser.add_argument('--sweep_cfg', type=str, default='UltraSeg/config/hyper/zhou-bayes-sweep.yaml', help='hyperparameters config file')
+    parser.add_argument('--sweep_cfg', type=str, default='UltraSeg/config/hyper/ema-sweep.yaml', help='hyperparameters config file')
     parser.add_argument('--work-dir',
                         default=ROOT / 'res', help='the dir to save logs and models')
     parser.add_argument('--project',
-                        default='zhou-seg', help='the project name to save logs')
+                        default='zhuiguan-seg', help='the project name to save logs')
     parser.add_argument('-n', '--name', default='exp', help='save to work-dir/project/name, and wandb run name')
     parser.add_argument('-d', '--device', default='2', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--load_from_ckpt', type=str, default=None, help='load from checkpoint')

@@ -1,0 +1,41 @@
+data_root: /home/t_wanghan/work/data/ZhuiGuan
+img_dir: images
+mask_dir: masks
+
+class_rgb_dir: rgb_overlay
+# object_dir: SegmentationObject
+
+img_suffix: .png
+mask_suffix: .png
+
+num_classes: 5
+num_training_samples: 131
+num_validation_samples: 57
+image_height: 920
+image_width: 1270
+
+mean:
+  data_train: [0.114, 0.122, 0.127]
+  imagenet: [0.485, 0.456, 0.406]
+
+std:
+  data_train: [0.174, 0.183, 0.190]
+  imagenet: [0.229, 0.224, 0.225]
+
+normalize_type: imagenet
+
+classes: [
+  背景(bg),
+  椎板(ban),
+  前复合体(qian),
+  后复合物(hou),
+  脊髓(ji),
+]
+
+color_map: [
+  [0,0,0],
+  [255, 0, 0],
+  [0, 255, 0],
+  [0, 0, 255],
+  [255, 255, 0]
+]

@@ -22,7 +22,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Train a segmentation model')
     parser.add_argument('--model_cfg', type=str, default=None, help='model config file')
     parser.add_argument('--dataset_cfg', type=str,
-                        default='UltraSeg/config/dataset/wan_guanBG.yaml',
+                        default='UltraSeg/config/dataset/zhuiguan/zhuiguan.yaml',
                         help='dataset config file')
     parser.add_argument('--hyper_cfg', type=str,
                         default='res/wan_guan-seg/best/timm-tf_efficientnet_lite1-no-att-no-roi-hard-samp-512-exp17/cfg/hyper.yaml',
@@ -30,7 +30,7 @@ def parse_args():
     parser.add_argument('--work-dir',
                         default=ROOT / 'res', help='the dir to save logs and models')
     parser.add_argument('--project',
-                        default='wan_guan-seg', help='the project name to save logs')
+                        default='zhuiguan-seg', help='the project name to save logs')
     parser.add_argument('--name', default='exp', help='save to work-dir/project/name')
     parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--load_from_ckpt', type=str, default=None, help='load from checkpoint')
