@@ -1,0 +1,114 @@
+# Optuna sweep config（兼容 wandb sweep 写法；也可使用 Optuna 原生写法：type/low/high/choices）
+# Optuna 原生写法举例：
+# =================== 固定值 ===================
+# epochs:
+#   type: fixed
+#   value: 100
+
+# =================== 选项为列表 ===================
+# optimizer: 
+#   type: categorical
+#   choices: [AdamW, SGD]
+# 或者：
+# batch_size:
+#   type: categorical
+#   choices: [8, 16]
+# =================== 选项为连续数值 ===================
+# 连续均匀采样
+# weight_decay:
+# type: float
+# low: 0.00001
+# high: 0.0005
+
+# 连续整数采样
+# layers：
+# type: int
+# low: 1
+# high: 8
+
+# 对数均匀采样
+# learning_rate:
+# type: float
+# low: 0.001
+# high: 0.1
+# log: true
+
+# 离散均匀采样，以步长为0.005采样
+# ema_decay：
+# type: float
+# low: 0.9
+# high: 0.999
+# step: 0.005
+
+
+
+seed:
+  value: 42
+
+epochs:
+  distribution: q_uniform
+  min: 50
+  max: 120
+  q: 10
+
+batch_size:
+  values: [8, 16]
+
+
+# optimizer
+optimizer:
+  values: [AdamW, SGD]
+
+weight_decay:
+  distribution: uniform
+  min: 0.00001  # 1e-5
+  max: 0.0005  # 5e-4
+
+momentum:  # not used for AdamW, but for other optimizers like SGD, it can be tuned
+  distribution: uniform
+  min: 0.85
+  max: 0.99
+
+# warmup
+warmup_epochs_ratio:
+  values: [0.2, 0.3]
+
+warmup_type:
+  value: cosine  
+#  [linear, cosine, exponential]
+ 
+warmup_start_factor:
+  value: 0.01
+
+
+# main lr
+main_lr_type:
+  value: cosine
+
+# decoder lr
+decoder_lr:
+  distribution: uniform
+  min: 0.01
+  max: 0.1
+
+# encoder lr factor
+encoder_lr_factor:
+  distribution: uniform
+  min: 0.1
+  max: 0.5
+
+
+# loss
+loss_type:
+  values: [[dice, bce], [focal, bce], [dice, focal]]
+
+alpha:
+  distribution: uniform
+  min: 0.25
+  max: 0.75
+
+ema_decay:
+  distribution: q_uniform
+  min: 0.9
+  max: 0.999
+  q: 0.005

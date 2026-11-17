@@ -163,7 +163,7 @@ def dict_to_obj(dictionary):
     Returns:
         object: 可以通过点号访问的对象
     """
-    class DictObject:
+    class Dict2Object:
         def __init__(self, data):
             for key, value in data.items():
                 if isinstance(value, dict):
@@ -171,7 +171,7 @@ def dict_to_obj(dictionary):
                 else:
                     setattr(self, key, value)
 
-    return DictObject(dictionary)
+    return Dict2Object(dictionary)
 
 
 def object_to_dict(obj):

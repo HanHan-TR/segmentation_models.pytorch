@@ -1,4 +1,4 @@
-# wandb sweep config
+# Optuna sweep config（兼容 wandb sweep 写法；也可使用 Optuna 原生写法：type/low/high/choices）
 seed:
   value: 42
 
@@ -69,4 +69,3 @@ ema_decay:
   min: 0.9
   max: 0.999
   q: 0.005
-  

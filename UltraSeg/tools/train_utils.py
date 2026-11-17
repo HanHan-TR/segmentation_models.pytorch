@@ -1,5 +1,4 @@
 import torch
-import wandb
 from torch import nn
 from torch.optim import Optimizer
 from torch.cuda.amp import GradScaler
@@ -49,7 +48,7 @@ def train_one_epoch(epoch: int,
             logits = model(images)
             loss = loss_fn(logits, masks)
 
-        if idx < 3 and epoch == 0:  # 记录前3个batch的训练损失到wandb
+        if idx < 3 and epoch == 0:  # 保存前3个batch的预测可视化结果
             # postprocess
             probs = torch.softmax(logits, dim=1)
             pred = torch.argmax(probs, dim=1).long()

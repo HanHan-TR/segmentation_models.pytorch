@@ -117,6 +117,10 @@ res/
 UltraSeg/images/
 wandb/
 
+# SwanLab 本地日志（swanlab.init(log_dir=...) 生成的 run 目录）
+swanlog/
+swanlab/
+
 # 图片
 *.png
 *.jpg

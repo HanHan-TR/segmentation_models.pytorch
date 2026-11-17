@@ -1,40 +1,42 @@
-# Import the W&B Python Library and log into W&B
-import wandb
+"""Optuna + SwanLab 冒烟测试：搜索 x、y 两个超参数，并把指标记录到 SwanLab。
 
-# 1: Define objective/training function
+用法（在 ultraseg 环境、已 swanlab login 的前提下）::
+
+    python UltraSeg/tmp/sweep_test.py
+"""
+
+import optuna
+import swanlab
+
+PROJECT = "test-project"
+STUDY_NAME = "optuna-swanlab-smoke-test"
 
 
-def objective(config):
-    for epoch in range(5):
-        for batch in range(10):
-            loss = config.x**2 + config.y**2
-            wandb.log({"loss": loss, "batch": batch, "epoch": epoch})
-    score = config.x**3 + config.y
-    acc = config.x**2 + config.y**2
-    recall = config.x**3 + config.y
+def objective(trial: optuna.Trial):
+    x = trial.suggest_float("x", 0.01, 0.1)
+    y = trial.suggest_categorical("y", [1, 3, 7])
 
-    wandb.log({"metric": {"acc": acc, "recall": recall}})
+    swanlab.init(project=PROJECT,
+                 name=f"{STUDY_NAME}-trial{trial.number}",
+                 config={"x": x, "y": y, "trial_number": trial.number},
+                 reinit=True)
+    try:
+        for epoch in range(5):
+            swanlab.log({"loss": x ** 2 + y ** 2}, step=epoch)
+        acc = x ** 2 + y ** 2
+        recall = x ** 3 + y
+        swanlab.log({"metric/acc": acc, "metric/recall": recall})
+        score = x ** 3 + y
+        swanlab.log({"score": score})
+    except Exception as error:
+        swanlab.finish(state="crashed", error=str(error))
+        raise
+    swanlab.finish()
     return score
 
 
-def main():
-    with wandb.init(project="my-first-sweep3") as run:
-        score = objective(run.config)
-        run.log({"score": score})
-
-
-# 2: Define the search space
-sweep_configuration = {
-    "method": "random",
-    "metric": {"goal": "minimize", "name": "score"},
-    "parameters": {
-        "x": {"max": 0.1, "min": 0.01},
-        "y": {"values": [1, 3, 7]},
-    },
-}
-
-# 3: Start the sweep
-
 if __name__ == "__main__":
-    sweep_id = wandb.sweep(sweep=sweep_configuration, project="my-first-sweep3")
-    wandb.agent(sweep_id, function=main, count=10)
+    study = optuna.create_study(direction="minimize", study_name=STUDY_NAME, load_if_exists=True)
+    study.optimize(objective, n_trials=10)
+    print(f"best trial: {study.best_trial.number}, score={study.best_value:.6f}")
+    print(f"best params: {study.best_params}")

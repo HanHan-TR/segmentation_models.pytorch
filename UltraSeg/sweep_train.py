@@ -1,5 +1,8 @@
 import argparse
-import wandb
+import json
+import numpy as np
+import optuna
+import swanlab
 from pathlib import Path
 import os
 import platform
@@ -22,7 +25,13 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 RANK = int(os.getenv('RANK', -1))
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from segmentation_models_pytorch import create_model
-from UltraSeg.core.fileio import yaml_load, yaml_save, increment_path
+from UltraSeg.core.fileio import yaml_load, yaml_save, increment_path, dict_to_obj, object_to_dict
+from UltraSeg.core.sweep import (build_search_space,
+                                 derive_epoch_metric_key,
+                                 export_trials_dataframe,
+                                 find_incompatible_params,
+                                 get_trial_params,
+                                 suggest_hyperparams)
 from UltraSeg.core.initialize import init_random_seed, set_random_seed
 from UltraSeg.core.dataset import create_dataset
 from UltraSeg.tools.val import validate_one_epoch, ModelSaver
@@ -36,7 +45,45 @@ from UltraSeg.core.ema import EMA
 from UltraSeg.logger.logger import get_environment_info, get_experiment_info, log_write
 
 
-def train(config):
+def _to_python(value):
+    """把 torch.Tensor / numpy 标量 / numpy 数组 / Path 转成 JSON 可序列化的原生类型。"""
+    if isinstance(value, torch.Tensor):
+        # 单元素张量取标量，多元素张量转成列表
+        return value.detach().cpu().item() if value.numel() == 1 else value.detach().cpu().tolist()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _to_python(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_python(item) for item in value]
+    return value
+
+
+def sanitize_metrics(metrics: dict) -> dict:
+    """过滤 None 值，并把 tensor / numpy 标量转成 python 原生类型，方便 SwanLab 与 JSON 记录。"""
+    sanitized = {}
+    for key, value in metrics.items():
+        if value is None:
+            continue
+        sanitized[key] = _to_python(value)
+    return sanitized
+
+
+def train(config, trial: optuna.Trial = None):
+    """训练一个实验。
+
+    Args:
+        config: 超参数配置对象（支持点号访问）。
+        trial: 传入 Optuna trial 时，会在每个 epoch 上报优化指标并支持剪枝；
+            为 None 时即为普通的单次训练（例如 base_train.py）。
+    Returns:
+        dict: 训练结束时记录的指标（与 SwanLab 中 best_* 系列的键一致），
+            供 Optuna objective 读取优化目标。
+    """
 
     try:
         os.stat(config.exp_dir)
@@ -51,6 +98,12 @@ def train(config):
     plot_dir.mkdir(parents=True, exist_ok=True)
     weight_dir.mkdir(parents=True, exist_ok=True)
     cfg_dir.mkdir(parents=True, exist_ok=True)
+
+    # epochs / batch_size 必须是整数：Optuna 采样或手写 hyper.yaml 都可能给出浮点值
+    for key in ('epochs', 'batch_size'):
+        value = getattr(config, key, None)
+        if value is not None:
+            setattr(config, key, int(value))
 
     # Load configs
     if config.model_cfg is None:
@@ -199,8 +252,19 @@ def train(config):
     ema = EMA(model, decay=config.ema_decay) if config.ema_decay > 0 else None
     metrics_row = ["accuracy", "precision", "recall", "iou", "dice", "f2score"]
 
+    # 训练过程指标历史：除 SwanLab 云端记录外，再落盘一份 JSON，
+    # 便于离线分析（替代原先从 wandb output.log 中解析指标的做法）
+    metrics_history = []
+    first_train_loss, last_train_loss = None, None
+
+    # Optuna 剪枝所用的优化指标：每个 epoch 上报的同名指标键
+    epoch_metric_key = None
+    if trial is not None:
+        opt_metric = getattr(config, 'opt_metric', 'best_ema/metric(macro)/dice')
+        epoch_metric_key = derive_epoch_metric_key(opt_metric)
+
     for epoch in range(epochs):
-        wandb_summary = {}
+        log_metrics = {}
         train_loss = train_one_epoch(epoch=epoch,
                                      model=model,
                                      color_map=dataset_cfg['color_map'],
@@ -217,11 +281,12 @@ def train(config):
                                      save_path=plot_dir)
 
         lr = lr_scheduler.get_last_lr()
-        wandb.log({"learning_rate/encoder_decay": lr[0],
-                   "learning_rate/encoder_no_decay": lr[1],
-                   "learning_rate/decoder_decay": lr[2],
-                   "learning_rate/decoder_no_decay": lr[3],
-                   })
+        # 学习率与验证指标合并到同一个 step 记录，避免产生多余的 step
+        log_metrics.update({"learning_rate/encoder_decay": lr[0],
+                            "learning_rate/encoder_no_decay": lr[1],
+                            "learning_rate/decoder_decay": lr[2],
+                            "learning_rate/decoder_no_decay": lr[3],
+                            })
         metrics_per_classes, metrics_all_classes, val_loss = validate_one_epoch(epoch=epoch,
                                                                                 model=model,
                                                                                 val_loader=val_loader,
@@ -233,13 +298,9 @@ def train(config):
                                                                                 model_type='ori',
                                                                                 empty_classes=empty_classes)
 
-        wandb_summary.update({"epoch": epoch,
-                              "loss/ori_train": train_loss,
-                              "loss/ori_val": val_loss,
-                              "learning_rate/encoder_decay": lr[0],
-                              "learning_rate/encoder_no_decay": lr[1],
-                              "learning_rate/decoder_decay": lr[2],
-                              "learning_rate/decoder_no_decay": lr[3]})
+        log_metrics.update({"epoch": epoch,
+                            "loss/ori_train": train_loss,
+                            "loss/ori_val": val_loss})
         lr_scheduler.step()
 
         ori_table = PrettyTable()
@@ -251,7 +312,7 @@ def train(config):
                 v = value[k]
                 data_row.append(f"{v:.4f}")
                 new_key = f"ori_metric({key})/{k}"
-                wandb_summary.update({new_key: v})
+                log_metrics.update({new_key: v})
             ori_table.add_row([key] + data_row)
         log_write(f"Epoch {epoch} - ori Model Validation Metrics:\n{ori_table}\n")
 
@@ -263,7 +324,7 @@ def train(config):
             for class_idx in range(len(value)):
                 new_key = f"ori_cls_metric({key})/c{class_idx}"
                 data_rows.append(f"{value[class_idx]:.4f}")
-                wandb_summary.update({new_key: value[class_idx]})
+                log_metrics.update({new_key: value[class_idx]})
             ori_cls_table.add_row(data_rows)
         log_write(f"Epoch {epoch} - ori Model Validation Metrics Per Class:\n{ori_cls_table}\n")
 
@@ -278,7 +339,7 @@ def train(config):
                                                                                                 epochs=epochs,
                                                                                                 model_type='ema',
                                                                                                 empty_classes=empty_classes)
-            wandb_summary.update({"loss/ema_val": ema_val_loss})
+            log_metrics.update({"loss/ema_val": ema_val_loss})
 
             ema_table = PrettyTable()
             ema_table.field_names = ["reduction"] + metrics_row
@@ -289,7 +350,7 @@ def train(config):
                     v = value[k]
                     data_row.append(f"{v:.4f}")
                     new_key = f"ema_metric({key})/{k}"
-                    wandb_summary.update({new_key: v})
+                    log_metrics.update({new_key: v})
                 ema_table.add_row([key] + data_row)
             log_write(f"Epoch {epoch} - ema Model Validation Metrics:\n{ema_table}\n")
 
@@ -301,7 +362,7 @@ def train(config):
                 for class_idx in range(len(value)):
                     new_key = f"ema_cls_metric({key})/c{class_idx}"
                     data_rows.append(f"{value[class_idx]:.4f}")
-                    wandb_summary.update({new_key: value[class_idx]})
+                    log_metrics.update({new_key: value[class_idx]})
                 ema_cls_table.add_row(data_rows)
             log_write(f"Epoch {epoch} - ema Model Validation Metrics Per Class:\n{ema_cls_table}\n")
 
@@ -317,17 +378,33 @@ def train(config):
                                            ema_metrics_per_classes=ema_metrics_per_classes if ema is not None else None,
                                            ema_metrics_all_classes=ema_metrics_all_classes if ema is not None else None,
                                            )
-        wandb_summary.update({"score/ori": composite_score['ori'],
-                              "score/ema": composite_score['ema'] if ema is not None else None})
-        wandb.log(wandb_summary)
+        log_metrics.update({"score/ori": composite_score['ori']})
+        if ema is not None:
+            log_metrics.update({"score/ema": composite_score['ema']})
+        swanlab.log(sanitize_metrics(log_metrics), step=epoch)
+
+        metrics_history.append(sanitize_metrics(log_metrics))
+        if first_train_loss is None:
+            first_train_loss = train_loss
+        last_train_loss = train_loss
+
+        # Optuna：上报当前 epoch 的优化指标，由 pruner 决定是否提前终止该 trial
+        if trial is not None:
+            epoch_value = log_metrics.get(epoch_metric_key)
+            if epoch_value is not None:
+                trial.report(float(epoch_value), step=epoch)
+                if trial.should_prune():
+                    log_write(f"Epoch {epoch} - trial {trial.number} pruned by Optuna.\n")
+                    raise optuna.TrialPruned()
 
     # end of training, log best epoch and best score for both original model and ema model (if exists)
     log_write("\n=================================== ⭐️ Best Model Validation Metrics ========================================= \n")
 
+    best_log = {}
     for model_type in model_saver.saved_model_types:
         best_epoch, best_score, best_metrics, best_metrics_per_classes = model_saver.get_best_info(model_type=model_type)
-        wandb.log({f"best_{model_type}/epoch": best_epoch,
-                   f"best_{model_type}/score": best_score})
+        best_log.update({f"best_{model_type}/epoch": best_epoch,
+                         f"best_{model_type}/score": best_score})
 
         per_class_metrics = {}
         table_cls = PrettyTable()
@@ -342,7 +419,7 @@ def train(config):
             table_cls.add_row(data_rows)
         log_write(f"Best {model_type} Model in Epoch {best_epoch} Validation Metrics Per Class:\n{table_cls}\n")
 
-        wandb.log(per_class_metrics)
+        best_log.update(per_class_metrics)
 
         metrics = {}
         table = PrettyTable()
@@ -358,7 +435,26 @@ def train(config):
             table.add_row([key] + data_row)
 
         log_write(f"Best {model_type} Model in Epoch {best_epoch} Validation Metrics:\n{table}\n")
-        wandb.log(metrics)
+        best_log.update(metrics)
+
+    swanlab.log(sanitize_metrics(best_log), step=epochs)
+
+    # 落盘最佳指标与训练元信息，供 analyze_sweep.py 等离线分析脚本使用
+    final_metrics = {
+        'best': sanitize_metrics(best_log),
+        'meta': {
+            'epochs': epochs,
+            'epochs_trained': len(metrics_history),
+            'first_train_loss': first_train_loss,
+            'last_train_loss': last_train_loss,
+            'opt_metric': getattr(config, 'opt_metric', None),
+            'exp_dir': str(config.exp_dir),
+        },
+    }
+    with open(cfg_dir / 'final_metrics.json', 'w', encoding='utf-8') as f:
+        json.dump(final_metrics, f, ensure_ascii=False, indent=2, default=str)
+    with open(cfg_dir / 'metrics_history.json', 'w', encoding='utf-8') as f:
+        json.dump(metrics_history, f, ensure_ascii=False, indent=2, default=str)
 
     #  Evaluate best model on validation set
     for model_type in model_saver.saved_model_types:
@@ -385,9 +481,12 @@ def train(config):
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
+    # 返回训练结束时的指标，供 Optuna objective 读取优化目标
+    return best_log
+
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Train a segmentation model')
+    parser = argparse.ArgumentParser(description='Train a segmentation model with Optuna hyperparameter tuning')
     parser.add_argument('--model_cfg', type=str, default=None, help='model config file')
     parser.add_argument('--arch', type=str, default='unet', help='architecture of the model')
     parser.add_argument('--encoder_name', type=str, default='timm-tf_efficientnet_lite1', help='encoder name for the model')
@@ -402,93 +501,195 @@ def parse_args():
     parser.add_argument('-rc', '--rare_classes', type=int, nargs='+',
                         default=None,  # 腕管：[1, 3, 6, 8, 11]
                         help='rare classes for training, e.g. --rare_classes 0 1 2')
-    parser.add_argument('--sweep_cfg', type=str, default='UltraSeg/config/hyper/ema-sweep.yaml', help='hyperparameters config file')
+    parser.add_argument('--sweep_cfg', type=str, default='UltraSeg/config/hyper/ema-sweep-zhuiguan.yaml', help='hyperparameters search space config file')
     parser.add_argument('--work-dir',
                         default=ROOT / 'res', help='the dir to save logs and models')
     parser.add_argument('--project',
                         default='zhuiguan-seg', help='the project name to save logs')
-    parser.add_argument('-n', '--name', default='exp', help='save to work-dir/project/name, and wandb run name')
+    parser.add_argument('-n', '--name', default='exp', help='save to work-dir/project/name, and SwanLab run name')
     parser.add_argument('-d', '--device', default='2', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--load_from_ckpt', type=str, default=None, help='load from checkpoint')
-    parser.add_argument('-sc', '--sweep_count', type=int, default=60, help='sweep count for wandb agent')
+    parser.add_argument('-sc', '--sweep_count', type=int, default=10, help='number of optuna trials')
+    parser.add_argument('--study_name', type=str, default=None, help='optuna study name, default: derived from model setting')
+    parser.add_argument('--storage', type=str, default=None, help='optuna storage url, default: sqlite under work-dir')
+    parser.add_argument('--sampler', type=str, default='tpe', choices=['tpe', 'random'], help='optuna sampler')
+    parser.add_argument('--pruner', type=str, default='median', choices=['median', 'percentile', 'none'], help='optuna pruner')
+    parser.add_argument('--prune_startup_trials', type=int, default=10, help='number of trials to wait before pruning')
+    parser.add_argument('--prune_warmup_epochs', type=int, default=20, help='number of epochs to wait before pruning')
+    parser.add_argument('--opt_metric', type=str, default='best_ema/metric(macro)/dice',
+                        help='metric to maximize, e.g. score/ema, best_ema/metric(macro)/dice')
+    parser.add_argument('--log_mode', type=str, default='online', choices=['online', 'offline', 'local', 'disabled'],
+                        help='SwanLab logging mode, default: online')
 
     args = parser.parse_args()
 
     return args
 
 
-def sweep_main():
-    opts = parse_args()
-    if opts.att_type is None:
-        att = 'no-att'
-    else:
-        att = opts.att_type
+def build_sweep_name(opts):
+    att = opts.att_type if opts.att_type is not None else 'no-att'
+    roi = 'roi' if opts.use_roi else 'no-roi'
+    hard_samp = 'hard-samp' if opts.hard_samp else 'no-hard-samp'
+    return f"{opts.encoder_name}-{att}-{roi}-{hard_samp}-{opts.input_size}"
 
-    if opts.use_roi is False:
-        roi = 'no-roi'
-    else:
-        roi = 'roi'
 
-    if opts.hard_samp:
-        hard_samp = 'hard-samp'
-    else:
-        hard_samp = 'no-hard-samp'
+def build_config(opts, hyper_params: dict, trial_number: int = None):
+    """把 CLI 参数与 trial 采样得到的超参数组合成本次实验的配置对象。"""
+    config = dict_to_obj(dict(hyper_params))
 
-    opts.name = f"{opts.encoder_name}-{att}-{roi}-{hard_samp}-{opts.input_size}-{opts.name}"
-    # setup output
-    exp_dir = increment_path(work_dir=opts.work_dir, project=opts.project, name=opts.name)
-    exp_folder_name = exp_dir.name
+    # epochs / batch_size 统一成整数，保证落盘的 hyper.yaml 与 SwanLab config 也是整数
+    for key in ('epochs', 'batch_size'):
+        value = getattr(config, key, None)
+        if value is not None:
+            setattr(config, key, int(value))
 
-    with wandb.init(project=opts.project, name=exp_folder_name, dir=exp_dir) as run:
-        run.config.exp_dir = exp_dir
-        run.config.model_cfg = opts.model_cfg if opts.model_cfg is not None else None
-        run.config.arch = opts.arch if opts.arch is not None else None
-        run.config.encoder_name = opts.encoder_name if opts.encoder_name is not None else None
-        run.config.encoder_init_weights = opts.encoder_init_weights if opts.encoder_init_weights is not None else None
-        run.config.dataset_cfg = opts.dataset_cfg
-        run.config.device = opts.device
-        run.config.input_size = opts.input_size
-        run.config.decoder_attention_type = opts.att_type
-        run.config.use_roi = opts.use_roi
-        run.config.hard_samp = opts.hard_samp
-        run.config.rare_classes = opts.rare_classes
-        run.config.load_from_ckpt = opts.load_from_ckpt if opts.load_from_ckpt is not None else None
-        run.config.augment_version = opts.augment_version
-        run.config.num_workers = opts.num_workers
-        train(run.config)
+    name = f"{build_sweep_name(opts)}-{opts.name}"
+    if trial_number is not None:
+        name = f"{name}-trial{trial_number}"
+    exp_dir = increment_path(work_dir=opts.work_dir, project=opts.project, name=name)
+
+    config.exp_dir = exp_dir
+    config.model_cfg = opts.model_cfg
+    config.arch = opts.arch
+    config.encoder_name = opts.encoder_name
+    config.encoder_init_weights = opts.encoder_init_weights
+    config.dataset_cfg = opts.dataset_cfg
+    config.device = opts.device
+    config.input_size = opts.input_size
+    config.decoder_attention_type = opts.att_type
+    config.use_roi = opts.use_roi
+    config.hard_samp = opts.hard_samp
+    config.rare_classes = opts.rare_classes
+    config.load_from_ckpt = opts.load_from_ckpt
+    config.augment_version = opts.augment_version
+    config.num_workers = opts.num_workers
+    config.opt_metric = opts.opt_metric
+    config.trial_number = trial_number
+
+    hyper_cfg = object_to_dict(config)
+    hyper_cfg['exp_dir'] = str(exp_dir)
+    config.hyper_cfg = hyper_cfg
+
+    return config
+
+
+def make_objective(opts, search_space: dict, study_name: str = None):
+    """构造 Optuna 的 objective：一次 trial 对应一次完整训练 + 一次 SwanLab 记录。"""
+
+    def objective(trial: optuna.Trial):
+        hyper_params = suggest_hyperparams(trial, search_space)
+        config = build_config(opts, hyper_params, trial_number=trial.number)
+
+        # 把实验目录记到 trial 上，方便从 Optuna 数据库 / CSV 反查对应实验
+        trial.set_user_attr('exp_dir', str(config.exp_dir))
+
+        run_config = dict(config.hyper_cfg)
+        run_config.update({'trial_number': trial.number,
+                           'study_name': study_name,
+                           'opt_metric': opts.opt_metric})
+
+        swanlab.init(project=opts.project,
+                     name=Path(config.exp_dir).name,
+                     group=study_name,       # 同一 study 的 trial 在 SwanLab 中归为一组
+                     job_type='sweep',
+                     log_dir=str(config.exp_dir),
+                     config=run_config,
+                     mode=opts.log_mode,
+                     reinit=True)            # 同一进程内连续跑多个 trial 必须 reinit
+        try:
+            final_metrics = train(config, trial=trial)
+        except optuna.TrialPruned:
+            swanlab.finish(state='aborted')
+            raise
+        except Exception as error:
+            swanlab.finish(state='crashed', error=str(error))
+            raise
+        swanlab.finish()
+
+        if opts.opt_metric not in final_metrics:
+            raise KeyError(f"Metric '{opts.opt_metric}' not found in the final metrics, "
+                           f"available keys: {sorted(final_metrics.keys())}")
+        return float(final_metrics[opts.opt_metric])
+
+    return objective
+
+
+def get_sampler(opts):
+    seed = 42
+    if opts.sampler == 'tpe':
+        return optuna.samplers.TPESampler(seed=seed)
+    return optuna.samplers.RandomSampler(seed=seed)
+
+
+def get_pruner(opts):
+    if opts.pruner == 'median':
+        return optuna.pruners.MedianPruner(n_startup_trials=opts.prune_startup_trials,
+                                           n_warmup_steps=opts.prune_warmup_epochs,
+                                           interval_steps=1)
+    if opts.pruner == 'percentile':
+        return optuna.pruners.PercentilePruner(percentile=25.0,
+                                               n_startup_trials=opts.prune_startup_trials,
+                                               n_warmup_steps=opts.prune_warmup_epochs,
+                                               interval_steps=1)
+    return optuna.pruners.NopPruner()
+
+
+def sweep_main(opts=None):
+    opts = opts if opts is not None else parse_args()
+
+    search_space = build_search_space(yaml_load(opts.sweep_cfg))
+    study_name = opts.study_name if opts.study_name is not None else build_sweep_name(opts)
+
+    sweep_dir = Path(opts.work_dir) / opts.project / 'sweeps'
+    sweep_dir.mkdir(parents=True, exist_ok=True)
+    storage = opts.storage if opts.storage is not None else f"sqlite:///{sweep_dir / f'{study_name}.db'}"
+
+    study = optuna.create_study(study_name=study_name,
+                                storage=storage,
+                                direction='maximize',
+                                sampler=get_sampler(opts),
+                                pruner=get_pruner(opts),
+                                load_if_exists=True)  # 已存在的同名 study 会继续追加 trial，方便中断后恢复
+
+    # Optuna 不允许同一 study 内同名参数更换分布类型；搜索空间调整后复用旧 study 会
+    # 在采样阶段直接报错（且 trial 尚未训练）。这里提前检查并给出可操作的提示。
+    mismatches = find_incompatible_params(study, search_space)
+    if mismatches:
+        detail = ', '.join(f"{m['param']}: {m['recorded']} -> {m['current']}" for m in mismatches)
+        db_path = storage[len('sqlite:///'):] if storage.startswith('sqlite:///') else storage
+        raise ValueError(
+            f"搜索空间与已有 study '{study_name}' 中记录的分布不兼容（{detail}）。\n"
+            f"Optuna 不允许同一个 study 内同名参数更换分布类型，请二选一：\n"
+            f"  1) 删除旧的 study 数据库后重跑：rm '{db_path}'\n"
+            f"  2) 换用新的 study 名：--study_name <new_name>"
+        )
+
+    log_write(f"\nOptuna study: {study_name}\n")
+    log_write(f"{'storage:':<20} {storage}\n")
+    log_write(f"{'search space:':<20} {list(search_space.keys())}\n")
+    log_write(f"{'objective:':<20} {opts.opt_metric} (maximize)\n")
+    log_write(f"{'trials:':<20} {opts.sweep_count}\n\n")
+
+    try:
+        study.optimize(make_objective(opts, search_space, study_name=study_name),
+                       n_trials=opts.sweep_count)
+    except KeyboardInterrupt:
+        log_write("\n⚠️ Sweep interrupted by user, saving current results...\n")
+
+    # 汇总结果：最优超参数写入 yaml（可直接作为 base_train.py 的 --hyper_cfg），全部 trial 写入 csv
+    best_params = get_trial_params(study.best_trial, search_space)
+    yaml_save(sweep_dir / f'{study_name}-best_params.yaml', best_params)
+    trials_df = export_trials_dataframe(study, search_space)
+    trials_df.to_csv(sweep_dir / f'{study_name}-trials.csv', index=False)
+
+    log_write("\n==================== Optuna sweep finished ====================\n")
+    log_write(f"Best trial: {study.best_trial.number}, {opts.opt_metric} = {study.best_value:.6f}\n")
+    for key, value in best_params.items():
+        log_write(f"{key + ':':<28} {value}\n")
+    log_write(f"📁 Best trial exp dir: {study.best_trial.user_attrs.get('exp_dir', 'N/A')}\n")
+    log_write(f"📁 Best params saved at: {sweep_dir / f'{study_name}-best_params.yaml'}\n")
+    log_write(f"📁 All trials saved at:  {sweep_dir / f'{study_name}-trials.csv'}\n")
 
 
 if __name__ == '__main__':
-    opts = parse_args()
-    if opts.att_type is None:
-        att = 'no-att'
-    else:
-        att = opts.att_type
-
-    if opts.use_roi is False:
-        roi = 'no-roi'
-    else:
-        roi = 'roi'
-
-    if opts.hard_samp:
-        hard_samp = 'hard-samp'
-    else:
-        hard_samp = 'no-hard-samp'
-
-    sweep_name = f"{opts.encoder_name}-{att}-{roi}-{hard_samp}-{opts.input_size}"
-
-    sweep_configuration = {
-        "name": sweep_name,
-        "method": "bayes",
-        "metric": {"goal": "maximize",
-                   "name": "best_ema/metric(macro)/dice"},
-        "parameters": {}
-    }
-    sweep_parameters = yaml_load(opts.sweep_cfg)
-    sweep_configuration["parameters"].update(sweep_parameters)
-
-    sweep_id = wandb.sweep(sweep=sweep_configuration,
-                           entity="wanghan-tr-tuorenmedical",
-                           project=opts.project)
-    wandb.agent(sweep_id, function=sweep_main, count=opts.sweep_count)
     sweep_main()

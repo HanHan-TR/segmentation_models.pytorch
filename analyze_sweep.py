@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Analyze sweep results from all experiments under res/zhou-seg/"""
 
+import json
 import os
 import re
 import yaml
@@ -9,6 +10,10 @@ from collections import defaultdict
 
 RES_DIR = "/home/t_wanghan/work/segmentation_models.pytorch/res/zhou-seg"
 
+HYPER_KEYS = ['alpha', 'batch_size', 'decoder_lr', 'ema_decay', 'encoder_lr_factor',
+              'epochs', 'loss_type', 'momentum', 'optimizer', 'warmup_epochs_ratio',
+              'weight_decay']
+
 
 def parse_config(config_path):
     """Parse wandb config.yaml to extract hyperparameters."""
@@ -16,9 +21,7 @@ def parse_config(config_path):
         config = yaml.safe_load(f)
 
     params = {}
-    for key in ['alpha', 'batch_size', 'decoder_lr', 'ema_decay',
-                'encoder_lr_factor', 'epochs', 'loss_type', 'momentum',
-                'optimizer', 'warmup_epochs_ratio', 'weight_decay']:
+    for key in HYPER_KEYS:
         if key in config:
             val = config[key]
             if isinstance(val, dict) and 'value' in val:
@@ -161,6 +164,49 @@ def parse_output_log(log_path):
     }
 
 
+def parse_hyper(hyper_path):
+    """Parse cfg/hyper.yaml (saved by sweep_train.py / base_train.py)."""
+    with open(hyper_path, 'r') as f:
+        config = yaml.safe_load(f) or {}
+    return {key: config[key] for key in HYPER_KEYS if key in config}
+
+
+def metrics_from_final(final_path):
+    """Convert cfg/final_metrics.json (written by train()) into analysis records."""
+    with open(final_path, 'r') as f:
+        final = json.load(f)
+    best_log = final.get('best', {})
+    meta = final.get('meta', {})
+
+    def block(model_type, reduction):
+        prefix = f"best_{model_type}/metric({reduction})/"
+        if not any(key.startswith(prefix) for key in best_log):
+            return None
+        record = {'epoch': best_log.get(f"best_{model_type}/epoch")}
+        for row in ['accuracy', 'precision', 'recall', 'iou', 'dice', 'f2score']:
+            record[row] = best_log.get(f"{prefix}{row}", 0.0)
+        return record
+
+    return {
+        'best_ori_macro': block('ori', 'macro'),
+        'best_ema_macro': block('ema', 'macro'),
+        'best_ori_micro': block('ori', 'micro'),
+        'best_ema_micro': block('ema', 'micro'),
+        'last_train_loss': meta.get('last_train_loss'),
+        'first_train_loss': meta.get('first_train_loss'),
+        'total_epochs_trained': meta.get('epochs_trained'),
+    }
+
+
+def find_wandb_file(exp_dir, filename):
+    """Locate a file inside a legacy wandb run directory."""
+    latest = os.path.join(exp_dir, 'wandb', 'latest-run', 'files', filename)
+    if os.path.exists(latest):
+        return latest
+    candidates = sorted(glob.glob(os.path.join(exp_dir, 'wandb', 'run-*', 'files', filename)))
+    return candidates[-1] if candidates else None
+
+
 def main():
     # Find all experiment dirs
     exp_dirs = sorted(glob.glob(os.path.join(RES_DIR, "*/")))
@@ -168,36 +214,40 @@ def main():
     results = []
     for exp_dir in exp_dirs:
         exp_name = os.path.basename(os.path.dirname(exp_dir))
-        # Find wandb run dir
-        wandb_dirs = glob.glob(os.path.join(exp_dir, "wandb", "run-*"))
-        if not wandb_dirs:
-            print(f"WARNING: No wandb run found for {exp_name}")
+
+        params = {}
+        hyper_path = os.path.join(exp_dir, 'cfg', 'hyper.yaml')
+        if os.path.exists(hyper_path):
+            params = parse_hyper(hyper_path)
+
+        metrics = None
+        final_path = os.path.join(exp_dir, 'cfg', 'final_metrics.json')
+        if os.path.exists(final_path):
+            metrics = metrics_from_final(final_path)
+        else:
+            # 兼容历史 wandb 实验：从 output.log 解析指标
+            log_path = find_wandb_file(exp_dir, 'output.log')
+            if log_path:
+                metrics = parse_output_log(log_path)
+                if not params:
+                    config_path = find_wandb_file(exp_dir, 'config.yaml')
+                    if config_path:
+                        params = parse_config(config_path)
+
+        if metrics is None:
+            print(f"WARNING: No final_metrics.json or wandb output.log found for {exp_name}")
             continue
 
-        for run_dir in wandb_dirs:
-            config_path = os.path.join(run_dir, "files", "config.yaml")
-            log_path = os.path.join(run_dir, "files", "output.log")
-
-            if not os.path.exists(config_path) or not os.path.exists(log_path):
-                print(f"WARNING: Missing files for {run_dir}")
-                continue
-
-            params = parse_config(config_path)
-            metrics = parse_output_log(log_path)
-
-            results.append({
-                'exp_name': exp_name,
-                'run_dir': os.path.basename(run_dir),
-                **params,
-                **metrics,
-            })
+        results.append({'exp_name': exp_name, **params, **metrics})
 
     # Sort by best ema macro dice
     results.sort(key=lambda x: (x.get('best_ema_macro') or {}).get('dice', 0), reverse=True)
 
     # Print summary
     print("=" * 200)
-    print(f"{'Rank':<5} {'Experiment':<65} {'Opt':<7} {'BS':<5} {'LR':<10} {'EncLR':<8} {'EMA':<8} {'WD':<12} {'Mom':<8} {'Alpha':<8} {'Loss':<18} {'Ep':<5} {'Warm':<6} {'Best_EMA_Dice':<14} {'Best_EMA_IoU':<14} {'Best_Ori_Dice':<14} {'Best_Ori_IoU':<14} {'BestEp':<8} {'TrainLoss':<10}")
+    print(f"{'Rank':<5} {'Experiment':<65} {'Opt':<7} {'BS':<5} {'LR':<10} {'EncLR':<8} {'EMA':<8} \
+            {'WD':<12} {'Mom':<8} {'Alpha':<8} {'Loss':<18} {'Ep':<5} {'Warm':<6} {'Best_EMA_Dice':<14} {'Best_EMA_IoU':<14} {'Best_Ori_Dice':<14} \
+            {'Best_Ori_IoU':<14} {'BestEp':<8} {'TrainLoss':<10}")
     print("=" * 200)
 
     for i, r in enumerate(results):
@@ -208,7 +258,11 @@ def main():
         if isinstance(loss_type_str, list):
             loss_type_str = '+'.join(loss_type_str)
 
-        print(f"{i+1:<5} {r['exp_name']:<65} {str(r.get('optimizer', 'N/A')):<7} {str(r.get('batch_size', 'N/A')):<5} {r.get('decoder_lr', 0):<10.6f} {r.get('encoder_lr_factor', 0):<8.4f} {r.get('ema_decay', 0):<8.4f} {r.get('weight_decay', 0):<12.8f} {r.get('momentum', 0):<8.4f} {r.get('alpha', 0):<8.4f} {loss_type_str:<18} {str(r.get('epochs', 'N/A')):<5} {str(r.get('warmup_epochs_ratio', 'N/A')):<6} {ema_best.get('dice', 0):<14.6f} {ema_best.get('iou', 0):<14.6f} {ori_best.get('dice', 0):<14.6f} {ori_best.get('iou', 0):<14.6f} {str(ema_best.get('epoch', 'N/A')):<8} {r.get('last_train_loss', 0) or 0:<10.4f}")
+        print(f"{i+1:<5} {r['exp_name']:<65} {str(r.get('optimizer', 'N/A')):<7} {str(r.get('batch_size', 'N/A')):<5} {(r.get('decoder_lr') or 0):<10.6f} \
+                {(r.get('encoder_lr_factor') or 0):<8.4f} {(r.get('ema_decay') or 0):<8.4f} {(r.get('weight_decay') or 0):<12.8f} {(r.get('momentum') or 0):<8.4f} \
+                {(r.get('alpha') or 0):<8.4f} {loss_type_str:<18} {str(r.get('epochs', 'N/A')):<5} {str(r.get('warmup_epochs_ratio', 'N/A')):<6} {(ema_best.get('dice') or 0):<14.6f} \
+                {(ema_best.get('iou') or 0):<14.6f} {(ori_best.get('dice') or 0):<14.6f} {(ori_best.get('iou') or 0):<14.6f} {str(ema_best.get('epoch', 'N/A')):<8}\
+                {(r.get('last_train_loss') or 0):<10.4f}")
 
     print("=" * 200)
 
@@ -224,11 +278,11 @@ def main():
         if isinstance(loss_type_str, list):
             loss_type_str = '+'.join(loss_type_str)
         print(f"  Rank {i+1}: {r['exp_name']}")
-        print(f"    Optimizer={r.get('optimizer')}, BS={r.get('batch_size')}, LR={r.get('decoder_lr'):.4f}, EncLR={r.get('encoder_lr_factor'):.4f}")
-        print(f"    EMA={r.get('ema_decay'):.4f}, WD={r.get('weight_decay'):.8f}, Mom={r.get('momentum'):.4f}, Alpha={r.get('alpha'):.4f}")
+        print(f"    Optimizer={r.get('optimizer')}, BS={r.get('batch_size')}, LR={r.get('decoder_lr') or 0:.4f}, EncLR={r.get('encoder_lr_factor') or 0:.4f}")
+        print(f"    EMA={r.get('ema_decay') or 0:.4f}, WD={r.get('weight_decay') or 0:.8f}, Mom={r.get('momentum') or 0:.4f}, Alpha={r.get('alpha') or 0:.4f}")
         print(f"    Loss={loss_type_str}, Epochs={r.get('epochs')}, Warmup={r.get('warmup_epochs_ratio')}")
-        print(f"    EMA Best: Dice={ema_best.get('dice'):.4f}, IoU={ema_best.get('iou'):.4f} @ Epoch {ema_best.get('epoch')}")
-        print(f"    Ori  Best: Dice={ori_best.get('dice'):.4f}, IoU={ori_best.get('iou'):.4f} @ Epoch {ori_best.get('epoch')}")
+        print(f"    EMA Best: Dice={ema_best.get('dice') or 0:.4f}, IoU={ema_best.get('iou') or 0:.4f} @ Epoch {ema_best.get('epoch')}")
+        print(f"    Ori  Best: Dice={ori_best.get('dice') or 0:.4f}, IoU={ori_best.get('iou') or 0:.4f} @ Epoch {ori_best.get('epoch')}")
         print()
 
     # Analysis by optimizer
@@ -298,7 +352,10 @@ def main():
         loss_type_str = str(r.get('loss_type', 'N/A'))
         if isinstance(loss_type_str, list):
             loss_type_str = '+'.join(loss_type_str)
-        print(f"{i+1},{r['exp_name']},{r.get('optimizer')},{r.get('batch_size')},{r.get('decoder_lr'):.6f},{r.get('encoder_lr_factor'):.4f},{r.get('ema_decay'):.4f},{r.get('weight_decay'):.8f},{r.get('momentum'):.4f},{r.get('alpha'):.4f},{loss_type_str},{r.get('epochs')},{r.get('warmup_epochs_ratio')},{ema_best.get('dice',0):.6f},{ema_best.get('iou',0):.6f},{ema_best.get('epoch','N/A')},{ori_best.get('dice',0):.6f},{ori_best.get('iou',0):.6f},{ori_best.get('epoch','N/A')},{r.get('last_train_loss',0) or 0:.4f}")
+        print(f"{i+1},{r['exp_name']},{r.get('optimizer')},{r.get('batch_size')},{(r.get('decoder_lr') or 0):.6f},{(r.get('encoder_lr_factor') or 0):.4f},{(r.get('ema_decay') or 0):.4f},\
+                {(r.get('weight_decay') or 0):.8f},{(r.get('momentum') or 0):.4f},{(r.get('alpha') or 0):.4f},{loss_type_str},{r.get('epochs')},{r.get('warmup_epochs_ratio')},\
+                {(ema_best.get('dice') or 0):.6f},{(ema_best.get('iou') or 0):.6f},{ema_best.get('epoch','N/A')},{(ori_best.get('dice') or 0):.6f},{(ori_best.get('iou') or 0):.6f},\
+                {ori_best.get('epoch','N/A')},{(r.get('last_train_loss') or 0):.4f}")
 
 
 if __name__ == '__main__':

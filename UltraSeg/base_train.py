@@ -1,6 +1,6 @@
 import argparse
 import shutil
-import wandb
+import swanlab
 from pathlib import Path
 import os
 import sys
@@ -34,6 +34,8 @@ def parse_args():
     parser.add_argument('--name', default='exp', help='save to work-dir/project/name')
     parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--load_from_ckpt', type=str, default=None, help='load from checkpoint')
+    parser.add_argument('--log_mode', type=str, default=None, choices=['online', 'offline', 'local', 'disabled'],
+                        help='SwanLab logging mode, default: online')
 
     args = parser.parse_args()
     # if 'LOCAL_RANK' not in os.environ:
@@ -60,17 +62,23 @@ def main():
     config.load_from_ckpt = opts.load_from_ckpt if opts.load_from_ckpt is not None else None
 
     hyper_cfg = object_to_dict(config)
+    hyper_cfg['exp_dir'] = str(exp_dir)
     config.hyper_cfg = hyper_cfg
 
-    wandb.init(
-        # Set the wandb entity where your project will be logged (generally your team name).
-        entity="wanghan-tr-tuorenmedical",
-        # Set the wandb project where this run will be logged.
+    # SwanLab 记录实验：项目名、实验名、本地日志目录与超参数配置
+    swanlab.init(
         project=opts.project,
         name=exp_dir.name,
-        dir=exp_dir,
+        log_dir=str(exp_dir),
+        config=hyper_cfg,
+        mode=opts.log_mode,
     )
-    train(config)
+    try:
+        train(config)
+    except Exception as error:
+        swanlab.finish(state='crashed', error=str(error))
+        raise
+    swanlab.finish()
 
 
 if __name__ == '__main__':
